@@ -1,0 +1,16 @@
+{
+  "name": "hacker-news-ai",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A Hacker News reader that reads the mood of each thread with your own AI key.",
+  "license": "MIT",
+  "scripts": {
+    "pin": "node scripts/pin-csp.js",
+    "test": "node scripts/pin-csp.js && node tests/smoke.js"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "0.1.65",
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^24.0.0"
+  }
+}

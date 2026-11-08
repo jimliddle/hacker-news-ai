@@ -1,6 +1,6 @@
 # Undercurrent
 
-A Hacker News reader that tells you how a thread feels before you start reading it. It's a single HTML file that runs in your browser, and the AI part works with your own API key from Anthropic, OpenAI or Google.
+A Hacker News reader with 'bring your own AI for thread analysis and chat. It's a single HTML file that runs in your browser, and the AI part works with your own API key from Anthropic, OpenAI or Google.
 
 <p>
   <img src="docs/feed.png" width="32%" alt="The front page, with a mood score next to each story and filters for positive, mixed, negative and neutral threads">

@@ -12,7 +12,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-VHzMxZWFR3EMXqM1xKMVlOQNkehkt9pJvHcEHxuN+oI='; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: blob:; manifest-src 'self' data: blob:; connect-src https://hacker-news.firebaseio.com https://hn.algolia.com https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-KUasD7P71v49xxfX6Idq0sZz2TYSBauoJPi9mVTzWpc='; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: blob:; manifest-src 'self' data: blob:; connect-src https://hacker-news.firebaseio.com https://hn.algolia.com https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#123840">
 <meta name="mobile-web-app-capable" content="yes">
@@ -197,6 +197,18 @@ a.s-title:hover{text-decoration:underline;text-decoration-thickness:2px;text-und
 .ai-load{display:grid;gap:9px;margin-top:12px}
 .ai-load p{margin:0 0 4px;color:var(--muted)}
 .ai-err{color:var(--neg)}
+.ai-actions{display:flex;gap:16px;flex-wrap:wrap}
+.shared-note{display:flex;gap:9px;align-items:flex-start;margin:12px 0 0;padding:9px 12px;border-radius:9px;background:color-mix(in srgb,var(--focus) 11%,transparent);font-size:.86rem;line-height:1.45}
+.shared-note .ic{width:16px;height:16px;flex:none;margin-top:2px;color:var(--focus)}
+.shared-qa{display:grid;gap:10px}
+.shared-qa .qa:last-child{border-bottom:0;padding-bottom:0}
+.sheet.share-sheet{padding:14px max(18px,env(safe-area-inset-right,0px)) calc(18px + env(safe-area-inset-bottom,0px)) max(18px,env(safe-area-inset-left,0px));display:grid;gap:12px}
+.share-hd{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.share-hd h2{margin:0;font:700 1.15rem var(--f-display)}
+.share-hd .icon-btn{margin-right:-10px}
+.share-preview{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:400 .84rem/1.5 var(--f-body);background:var(--sunk);border-radius:10px;padding:12px 14px;max-height:42vh;overflow-y:auto}
+.share-note{margin:0;color:var(--muted);font-size:.84rem}
+.share-actions{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .ask{margin:8px 10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:grid;gap:12px}
 .ask-hd{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .ask-hd h3{margin:0;font:700 1rem var(--f-display);display:inline-flex;align-items:center;gap:7px}
@@ -550,7 +562,7 @@ const state = {
   seen: new Map(), saved: new Map(),
   thread: null, navTok: 0, navCount: 0, lastList: '#/top',
   inflight: new Map(), searchSort: 'relevance', searchCache: new Map(),
-  moods: new Map(), moodFilter: { verdict: null, hideHeated: false }, ledger: null, prereadMsg: null,
+  moods: new Map(), moodFilter: { verdict: null, hideHeated: false }, ledger: null, prereadMsg: null, shared: new Map(),
 };
 
 /* ---------- network ---------- */
@@ -1010,6 +1022,7 @@ function threadHeader(story, total) {
     iconBtn('share', 'Share discussion', () => share({ title: story.title, path: `item/${story.id}`, hnId: story.id })),
     iconBtn('more', 'More', () => openSheet(story.title, [
       { icon: 'refresh', label: 'Refresh thread', run: () => { state.thread = null; showThread(story.id); } },
+      (state.moods.has(story.id) || state.shared.has(story.id)) && { icon: 'spark', label: 'Share summary', run: () => openShareSummary(story) },
       ...textItems(),
       story.url && { icon: 'link', label: 'Copy article link', run: () => copy(story.url, 'Article link copied') },
       { icon: 'link', label: 'Copy Hacker News link', run: () => copy(hnUrl(story.id), 'Hacker News link copied') },
@@ -1366,6 +1379,8 @@ function analyzeStory(story, tr, pid, model, kind) {
 async function setupAnalysis(box, story) {
   const [saved, cached] = await Promise.all([savedProviders(), S.get('analysis', story.id).catch(() => null)]);
   if (!box.isConnected) return;
+  const sh = state.shared.get(story.id);
+  if (sh && !sh.dismissed) return renderResult(box, sh, story, { hasOwn: !!cached });
   const inflight = state.inflight.get(story.id);
   if (inflight) {
     renderLoading(box, inflight.meta);
@@ -1451,8 +1466,11 @@ async function runAnalysis(box, story, pid) {
   try { const rec = await p; if (box.isConnected) renderResult(box, rec, story); }
   catch (e) { if (box.isConnected) renderError(box, story, e); }
 }
-function renderResult(box, rec, story) {
+function renderResult(box, rec, story, opts = {}) {
   const r = rec.result;
+  const shared = rec.kind === 'shared';
+  const sh = state.shared.get(story.id);
+  const analyzeYourself = () => { if (sh) sh.dismissed = true; reanalyze(box, story); };
   box.className = 'ai'; box.dataset.state = 'done';
   const split = h('div', { class: 'split', role: 'img', 'aria-label': `${r.split.positive}% positive, ${r.split.neutral}% neutral, ${r.split.negative}% negative` });
   [['p', r.split.positive], ['n', r.split.neutral], ['g', r.split.negative]].forEach(([c, v]) => {
@@ -1467,6 +1485,8 @@ function renderResult(box, rec, story) {
       r.heat && h('span', { class: `pill heat-${r.heat}`, text: cap(r.heat) }),
       h('span', { class: 'ai-score', title: 'Sentiment score, from −100 to +100', text: (r.score > 0 ? '+' : '') + r.score }),
     ]),
+    shared && h('p', { class: 'shared-note' }, icon('share'),
+      h('span', { text: `Shared with you. Made with ${PROVIDERS[rec.provider]?.name || 'an AI model'}${rec.model ? ` (${rec.model})` : ''} on ${fmtDate(rec.at)}, not on this device.` })),
     r.headline && h('p', { class: 'ai-headline', text: r.headline }),
     split,
     h('div', { class: 'legend' },
@@ -1478,12 +1498,177 @@ function renderResult(box, rec, story) {
       h('ul', { class: 'themes' }, r.themes.map(t => h('li', null, h('i', { class: `dot s-${t.sentiment}`, title: t.sentiment }), h('div', null, h('b', { text: t.label }), t.detail && h('span', { text: ' ' + t.detail })))))],
     reads.length > 0 && [h('h4', { text: 'Read these first' }),
       h('div', { class: 'reads' }, reads.map(({ s, node }) => h('a', { class: 'read-link', href: `#/item/${story.id}/${s.id}` }, h('b', { text: node.by }), h('span', { text: s.why }))))],
+    shared && rec.qa.length > 0 && [h('h4', { text: 'Questions they asked' }),
+      h('div', { class: 'shared-qa' }, rec.qa.map(x => h('div', { class: 'qa' }, h('p', { class: 'q', text: x.q }), h('div', { class: 'a' }, renderAnswer(x.a, story)))))],
     fresh >= Math.max(10, rec.total * 0.2) && h('div', { class: 'ai-new' }, `${plural(fresh, 'new comment')} since this read.`,
-      h('button', { class: 'btn-text', type: 'button', onclick: () => reanalyze(box, story) }, 'Update')),
+      h('button', { class: 'btn-text', type: 'button', onclick: shared ? analyzeYourself : () => reanalyze(box, story) }, shared ? 'Analyze it yourself' : 'Update')),
     h('div', { class: 'ai-foot' },
-      h('span', { text: [PROVIDERS[rec.provider]?.name || rec.provider, rec.model, rec.kind === 'preread' ? 'pre-read' : null,
+      h('span', { text: [shared ? 'Shared' : null, PROVIDERS[rec.provider]?.name || rec.provider, rec.model, rec.kind === 'preread' ? 'pre-read' : null,
         `${rec.analysed} of ${plural(rec.total, 'comment')}`, rec.cost != null ? money(rec.cost) : null, agoWords(rec.at)].filter(Boolean).join(' · ') }),
-      h('button', { class: 'btn-text', type: 'button', onclick: () => reanalyze(box, story) }, rec.kind === 'preread' ? 'Re-analyze in full' : 'Re-analyze')));
+      h('span', { class: 'ai-actions' },
+        h('button', { class: 'btn-text', type: 'button', onclick: () => openShareSummary(story) }, 'Share'),
+        shared
+          ? h('button', { class: 'btn-text', type: 'button', onclick: opts.hasOwn ? () => { sh.dismissed = true; setupAnalysis(box, story); } : analyzeYourself },
+              opts.hasOwn ? 'Show your analysis' : 'Analyze it yourself')
+          : [sh && h('button', { class: 'btn-text', type: 'button', onclick: () => { sh.dismissed = false; setupAnalysis(box, story); } }, 'Shared summary'),
+             h('button', { class: 'btn-text', type: 'button', onclick: () => reanalyze(box, story) }, rec.kind === 'preread' ? 'Re-analyze in full' : 'Re-analyze')])));
+}
+
+/* ---------- sharing summaries ----------
+   A shared link carries the summary itself after the #, so whoever opens it sees it without an
+   API key, and the host never receives it. Incoming payloads are untrusted: they are size-capped,
+   re-validated, shown with a "shared with you" label and never saved as this device's own analysis. */
+const fmtDate = ms => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+function b64u(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function unb64u(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  const bin = atob(str), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function pipeBytes(bytes, ts, limit) {
+  const w = ts.writable.getWriter();
+  w.write(bytes).catch(() => {}); w.close().catch(() => {});
+  const reader = ts.readable.getReader(), chunks = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.length;
+    if (limit && n > limit) { reader.cancel().catch(() => {}); throw new Error('too large'); }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(n); let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+async function encodeShare(obj) {
+  const raw = te.encode(JSON.stringify(obj));
+  if (typeof CompressionStream === 'function') {
+    try { return '1' + b64u(await pipeBytes(raw, new CompressionStream('deflate-raw'))); } catch {}
+  }
+  return '0' + b64u(raw);
+}
+class ShareError extends Error {}
+async function decodeShare(str) {
+  if (!str || str.length > 24000 || !/^[01][A-Za-z0-9_-]+$/.test(str)) throw new ShareError("This shared summary link is incomplete or damaged. Showing the thread instead.");
+  let bytes;
+  try { bytes = unb64u(str.slice(1)); } catch { throw new ShareError("This shared summary link is damaged. Showing the thread instead."); }
+  if (str[0] === '1') {
+    if (typeof DecompressionStream !== 'function') throw new ShareError("This browser can't open shared summaries. Updating it should fix that. Showing the thread instead.");
+    try { bytes = await pipeBytes(bytes, new DecompressionStream('deflate-raw'), 100000); }
+    catch { throw new ShareError("This shared summary link is damaged. Showing the thread instead."); }
+  }
+  try { return JSON.parse(td.decode(bytes)); } catch { throw new ShareError("This shared summary link is damaged. Showing the thread instead."); }
+}
+function sharePayload(id, rec, qa) {
+  const r = rec.result;
+  return { v: 1, id, p: rec.provider, m: rec.model, at: rec.at, n: rec.analysed, N: rec.total,
+    r: { verdict: r.verdict, score: r.score, heat: r.heat, headline: r.headline, summary: r.summary, split: r.split, themes: r.themes, standouts: r.standouts },
+    qa: qa.map(x => ({ q: x.q, a: x.a })) };
+}
+function cleanShared(o, id) {
+  if (!o || o.v !== 1 || +o.id !== id || !o.r || typeof o.r !== 'object') throw new ShareError("This shared summary doesn't match the thread it links to. Showing the thread instead.");
+  const str = (x, n) => String(x ?? '').slice(0, n);
+  return {
+    id, kind: 'shared', cost: null, dismissed: false,
+    result: parseResult(JSON.stringify(o.r)),
+    provider: PROVIDERS[o.p] ? o.p : null,
+    model: str(o.m, 80).replace(/[^\w.:\/-]/g, ''),
+    at: clamp(+o.at || 0, 0, Date.now()),
+    analysed: clamp(Math.floor(+o.n) || 0, 0, 1e5),
+    total: clamp(Math.floor(+o.N) || 0, 0, 1e5),
+    qa: (Array.isArray(o.qa) ? o.qa : []).slice(0, 6).map(x => ({ q: str(x?.q, 500).trim(), a: str(x?.a, 4000).trim() })).filter(x => x.q && x.a),
+  };
+}
+async function openShared(id, enc) {
+  let sh = state.shared.get(id);
+  if (!sh || sh.enc !== enc) {
+    try { sh = cleanShared(await decodeShare(enc), id); sh.enc = enc; state.shared.set(id, sh); }
+    catch (e) { sh = null; toast(e instanceof ShareError ? e.message : "This shared summary couldn't be read. Showing the thread instead."); }
+  }
+  if (sh) sh.dismissed = false;
+  const wasReady = state.thread?.id === id && state.thread.ready;
+  await showThread(id);
+  if (wasReady) { const box = $('.ai', threadEl); if (box) setupAnalysis(box, state.thread.story); }
+}
+function plainCites(text, storyId) {
+  return text.replace(/\s*\[(\d{3,}(?:\s*,\s*\d{3,})*)\]/g, (_, ids) => {
+    const names = [...new Set(ids.split(',').map(x => state.thread?.id === storyId ? state.thread.nodes.get(+x.trim())?.n.by : null).filter(Boolean))];
+    return names.length ? ` (${names.join(', ')})` : '';
+  });
+}
+function summaryText(story, rec, qa, link) {
+  const r = rec.result, L = [story.title];
+  if (story.url) L.push(story.url);
+  L.push('', `Hacker News mood: ${cap(r.verdict)}, ${(r.score > 0 ? '+' : '') + r.score}${r.heat ? ` (${r.heat})` : ''}`);
+  if (r.headline) L.push(r.headline);
+  if (r.summary) L.push('', r.summary);
+  if (r.themes.length) {
+    L.push('', 'What people keep coming back to:');
+    for (const t of r.themes) L.push(`• ${t.label}${t.sentiment !== 'neutral' ? ` (${t.sentiment})` : ''}${t.detail ? `: ${t.detail}` : ''}`);
+  }
+  for (const x of qa) {
+    const a = plainCites(x.a, story.id);
+    L.push('', `Q: ${x.q}`, ...(a.includes('\n') ? ['A:', a] : [`A: ${a}`]));
+  }
+  L.push('', `Discussion: ${hnUrl(story.id)}`);
+  L.push(`Summary by ${PROVIDERS[rec.provider]?.name || 'an AI model'}${rec.model ? ` (${rec.model})` : ''} from ${rec.analysed} of ${plural(rec.total, 'comment')}, ${fmtDate(rec.at)}.`);
+  if (link) L.push('', `Open it in Undercurrent: ${link}`);
+  return L.join('\n');
+}
+async function openShareSummary(story) {
+  const sh = state.shared.get(story.id);
+  let rec, qa;
+  if (sh && !sh.dismissed) { rec = sh; qa = sh.qa; }
+  else {
+    rec = await S.get('analysis', story.id).catch(() => null);
+    qa = (await S.get('kv', 'qa:' + story.id).catch(() => null)) || [];
+  }
+  if (!rec) { toast('Analyze this thread first, then you can share the summary'); return; }
+  let includeQA = false, built = null, gen = 0;
+  const preview = h('pre', { class: 'share-preview', tabindex: '0', 'aria-label': 'Message preview' });
+  const note = h('p', { class: 'share-note' });
+  const canShare = typeof navigator.share === 'function';
+  const shareBtn = canShare && h('button', { class: 'btn', type: 'button', disabled: true }, icon('share'), 'Share');
+  const copyBtn = h('button', { class: canShare ? 'btn ghost' : 'btn', type: 'button', disabled: true }, icon('link'), 'Copy');
+  const sheet = h('div', { class: 'sheet share-sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'shareTitle' },
+    h('div', { class: 'share-hd' }, h('h2', { id: 'shareTitle', text: 'Share summary' }), iconBtn('close', 'Close', () => ov.close())),
+    qa.length > 0 && h('label', { class: 'toggle' },
+      h('input', { type: 'checkbox', id: 'shareQA', onchange: e => { includeQA = e.target.checked; build(); } }),
+      h('span', null, `Include ${sh && !sh.dismissed ? 'the' : 'your'} questions and answers (${qa.length})`)),
+    preview, note,
+    h('div', { class: 'share-actions' }, shareBtn, copyBtn));
+  const ov = openOverlay(sheet);
+  async function build() {
+    const my = ++gen;
+    if (shareBtn) shareBtn.disabled = true;
+    copyBtn.disabled = true;
+    const use = includeQA ? qa : [];
+    let link = null;
+    if (appLink('')) { try { link = appLink(`item/${story.id}/s/${await encodeShare(sharePayload(story.id, rec, use))}`); } catch {} }
+    if (my !== gen) return;
+    built = summaryText(story, rec, use, link);
+    preview.textContent = link ? built.replace(link, link.slice(0, link.indexOf('/s/') + 11) + '…') : built;
+    note.textContent = link
+      ? 'The link at the end opens this thread in Undercurrent with the summary showing. Whoever opens it doesn’t need an API key, and the summary never passes through a server.'
+      : 'This copy of the app isn’t running from a web address, so the message has no app link. The Hacker News link is still included.';
+    if (shareBtn) shareBtn.disabled = false;
+    copyBtn.disabled = false;
+  }
+  copyBtn.addEventListener('click', () => { if (built) { copy(built, 'Summary copied'); ov.close(); } });
+  shareBtn && shareBtn.addEventListener('click', async () => {
+    if (!built) return;
+    try { await navigator.share({ title: story.title, text: built }); ov.close(); }
+    catch (e) { if (e.name !== 'AbortError') { copy(built, 'Sharing isn’t available here, so the summary was copied'); ov.close(); } }
+  });
+  build();
+  setTimeout(() => (shareBtn || copyBtn).focus(), 60);
 }
 
 /* ---------- moods on the feed ---------- */
@@ -2030,7 +2215,10 @@ function route() {
   document.querySelectorAll('.scrim').forEach(s => s.close?.());
   const parts = location.hash.replace(/^#\/?/, '').split('/');
   const [a = '', b, c] = parts;
-  if (a === 'item' && /^\d+$/.test(b || '')) return showThread(+b, /^\d+$/.test(c || '') ? +c : null);
+  if (a === 'item' && /^\d+$/.test(b || '')) {
+    if (c === 's' && parts[3]) return openShared(+b, parts[3]);
+    return showThread(+b, /^\d+$/.test(c || '') ? +c : null);
+  }
   if (a === 'hn' && /^\d+$/.test(b || '')) return resolveHn(+b);
   if (a === 'saved') return showSaved(b === 'comments' ? 'comments' : 'stories');
   if (a === 'search') { let q = ''; try { q = decodeURIComponent(parts.slice(1).join('/')); } catch {} return showSearch(q); }

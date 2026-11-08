@@ -18,6 +18,8 @@ When you open a discussion, the first thing you see is a read of the comments as
 
 Under that summary you can ask the thread questions, such as "what are the main objections?" or "did anyone who has used this in production comment?". Answers only draw on the comments in that thread and link to the ones they're based on.
 
+You can share a thread's summary with anyone. They get a readable message with the mood, the main themes and the article and discussion links, plus a link that opens the thread in the app with your summary already showing. They don't need an API key to see it, and you choose whether your questions and answers go with it.
+
 Stories you've already analysed show their mood on the front page, so you can filter the list down to positive threads or hide the heated ones. If you switch on pre-reading, a cheaper model reads the top 5 to 30 stories in the background whenever a feed loads. You can also analyse any single story from its menu without opening it.
 
 The rest is what you'd want from an HN reader. There are Top, New, Best, Ask, Show and Jobs feeds and search. Comment threads collapse, and you can save stories and individual comments. Stories you've read are greyed out, with a count of new comments since your last visit. You can choose between four themes, adjust the text size and install it as an app on your phone or desktop.
@@ -61,6 +63,10 @@ You can type any other model name into Settings. Claude is called straight from 
 ## Sharing links
 
 A thread link looks like `https://your-host/#/item/45123456`. A link to a single comment adds the comment's ID: `#/item/45123456/45123999`. Opening a comment link loads the thread, expands anything collapsed above that comment and highlights it. Links to news.ycombinator.com inside comments also open in the app.
+
+Summary links work differently. Share summary (under the mood card, or in a thread's menu) builds a plain-text message you can paste anywhere, ending with a link like `#/item/45123456/s/1fVTLbt...`. Everything after `/s/` is the summary itself, compressed, and any questions and answers you chose to include. A summary with one question comes to around a thousand characters. Browsers never send the part of a URL after the `#` to the server, so the summary goes from your device to theirs without passing through the host.
+
+When someone opens a summary link, the thread loads from Hacker News as normal and the shared summary sits where their own would go, labelled with the model that made it and when. It isn't saved on their device and doesn't trigger an analysis of their own. If they have a key, they can analyse the thread themselves with one tap. Anyone can edit a link, so the app treats shared summaries as untrusted. It checks they belong to the thread they link to, caps their size and shows them as plain text.
 
 ## Working on it
 

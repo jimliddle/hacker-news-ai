@@ -2,6 +2,8 @@
 
 A Hacker News reader with 'bring your own AI for thread analysis and chat. It's a single HTML file that runs in your browser, and the AI part works with your own API key from Anthropic, OpenAI or Google.
 
+https://jimliddle.github.io/hacker-news-ai/
+
 <p>
   <img src="docs/feed.png" width="32%" alt="The front page, with a mood score next to each story and filters for positive, mixed, negative and neutral threads">
   <img src="docs/thread.png" width="32%" alt="A thread opening with its mood summary: verdict, score, positive and negative split, main themes and comments to read first">

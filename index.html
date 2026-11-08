@@ -1,0 +1,2058 @@
+<!doctype html>
+<!--
+  Undercurrent: a Hacker News reader that reads the mood of a thread before you do.
+  Single file, no build step. Host it on any static host over HTTPS (or open it locally).
+
+  Security notes
+  - The Content-Security-Policy below only lets this page talk to the HN APIs and the three AI providers.
+  - script-src is pinned to a sha256 hash of the inline script. If you edit the script, run `npm run pin`
+    to update the hash in the meta tag, or the app won't run.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-VHzMxZWFR3EMXqM1xKMVlOQNkehkt9pJvHcEHxuN+oI='; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: blob:; manifest-src 'self' data: blob:; connect-src https://hacker-news.firebaseio.com https://hn.algolia.com https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#123840">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Undercurrent">
+<meta name="application-name" content="Undercurrent">
+<title>Undercurrent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column; each story is a ledger row with a tinted rank band on the left.
+   In a thread, the mood card sits between the story and the first comment. */
+:root{
+  --bg:#e7edef; --surface:#fbfdfd; --sunk:#eef3f4; --band:#d0e0e3; --band-ink:#1d4850;
+  --ink:#132228; --muted:#566b72; --read:#8a9ba1; --line:#d2dcdf;
+  --bar:#123840; --bar-ink:#eef7f8; --bar-muted:#9cc0c6; --pri:#123840; --pri-ink:#eef7f8;
+  --accent:#b35e17; --accent-soft:#f5e2cf;
+  --pos:#2a8352; --neu:#788a90; --neg:#bc3d2c; --mix:#a07510; --focus:#24808f;
+  --d1:#24808f; --d2:#b35e17; --d3:#6a5db3; --d4:#2a8352; --d5:#bc3d2c; --d6:#857428;
+  --f-display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
+  --f-body:"Atkinson Hyperlegible",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]):not([data-theme="bright"]){
+    --bg:#0b1215; --surface:#131d21; --sunk:#0f181b; --band:#172a2f; --band-ink:#9fd1d9;
+    --ink:#e1eaec; --muted:#8ca1a7; --read:#5d7177; --line:#223339;
+    --bar:#0a1b20; --bar-ink:#e5f1f3; --bar-muted:#7ea6ad; --pri:#2a6d78; --pri-ink:#f1fafb;
+    --accent:#ec9a4f; --accent-soft:#3a2616;
+    --pos:#4dbd81; --neu:#8a9ba1; --neg:#f06d5a; --mix:#e1b347; --focus:#5bc3d3;
+    --d1:#5bc3d3; --d2:#ec9a4f; --d3:#a497f0; --d4:#4dbd81; --d5:#f06d5a; --d6:#cdb860;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0b1215; --surface:#131d21; --sunk:#0f181b; --band:#172a2f; --band-ink:#9fd1d9;
+  --ink:#e1eaec; --muted:#8ca1a7; --read:#5d7177; --line:#223339;
+  --bar:#0a1b20; --bar-ink:#e5f1f3; --bar-muted:#7ea6ad; --pri:#2a6d78; --pri-ink:#f1fafb;
+  --accent:#ec9a4f; --accent-soft:#3a2616;
+  --pos:#4dbd81; --neu:#8a9ba1; --neg:#f06d5a; --mix:#e1b347; --focus:#5bc3d3;
+  --d1:#5bc3d3; --d2:#ec9a4f; --d3:#a497f0; --d4:#4dbd81; --d5:#f06d5a; --d6:#cdb860;
+  color-scheme:dark;
+}
+:root[data-theme="bright"]{
+  --bg:#eef2f3; --surface:#ffffff; --sunk:#f3f6f7; --band:#e5f0f2; --band-ink:#1d5964;
+  --ink:#10191d; --muted:#5a6d73; --read:#97a5aa; --line:#dce4e6;
+  --bar:#ffffff; --bar-ink:#10191d; --bar-muted:#62767c; --pri:#1d5964; --pri-ink:#ffffff;
+  --accent:#b35e17; --accent-soft:#fbe9d8;
+  --pos:#2a8352; --neu:#788a90; --neg:#bc3d2c; --mix:#a07510; --focus:#1f7a89;
+  --d1:#24808f; --d2:#b35e17; --d3:#6a5db3; --d4:#2a8352; --d5:#bc3d2c; --d6:#857428;
+  color-scheme:light;
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;font-size:calc(100% * var(--ts,1))}
+body{margin:0;background:var(--bg);color:var(--ink);font:400 .9375rem/1.5 var(--f-body);padding-bottom:env(safe-area-inset-bottom,0px);min-height:100vh}
+[hidden]{display:none!important}
+a{color:inherit}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.ic{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.sprite{position:absolute;width:0;height:0;overflow:hidden}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* Header */
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--bar);z-index:30}
+.hdr{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--bar);color:var(--bar-ink);box-shadow:0 1px 0 var(--line)}
+.hdr-in{max-width:52rem;margin:0 auto;display:flex;align-items:center;gap:2px;min-height:62px;padding-left:max(6px,env(safe-area-inset-left,0px));padding-right:max(6px,env(safe-area-inset-right,0px))}
+.icon-btn{display:grid;place-items:center;width:44px;height:44px;flex:none;border:0;background:transparent;border-radius:50%;cursor:pointer;color:inherit;padding:0}
+.icon-btn:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
+.hd-titles{flex:1;min-width:0;padding:0 8px}
+.hd-title{margin:0;font:700 1.22rem/1.15 var(--f-display);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hd-sub{font:400 .74rem/1.3 var(--f-mono);color:var(--bar-muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hd-search{flex:1;min-width:0;display:flex;padding:0 6px}
+.hd-input{flex:1;min-width:0;height:42px;border:0;border-radius:21px;padding:0 18px;background:color-mix(in srgb,var(--bar-ink) 13%,transparent);color:var(--bar-ink);font-size:max(16px,1rem)}
+.hd-input::placeholder{color:var(--bar-muted)}
+
+main{max-width:52rem;margin:0 auto;padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
+
+/* Story rows */
+.list{display:flex;flex-direction:column;gap:6px;padding-block:6px 24px}
+.row{display:grid;grid-template-columns:4.5rem minmax(0,1fr) auto 2.75rem;background:var(--surface);min-height:5.75rem}
+.r-rank{background:var(--band);color:var(--band-ink);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-decoration:none;padding:8px 2px}
+.r-rank b{font:700 1.4rem/1 var(--f-display);font-variant-numeric:tabular-nums}
+.r-rank span{font:400 .76rem/1 var(--f-mono);opacity:.85;font-variant-numeric:tabular-nums}
+.r-main{padding:12px 6px 12px 14px;min-width:0;display:flex;flex-direction:column;gap:3px;cursor:pointer}
+.r-title{font:700 1.04rem/1.32 var(--f-body);text-decoration:none;color:var(--ink);overflow-wrap:anywhere;align-self:flex-start}
+.r-title:hover{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+.row.read .r-title{color:var(--read);font-weight:400}
+.r-dom{font-style:italic;color:var(--muted);font-size:.86rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.r-meta{color:var(--muted);font:400 .78rem/1.4 var(--f-mono);display:flex;align-items:center;gap:10px;min-width:0}
+.r-when{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.r-mood{display:inline-flex;align-items:center;gap:5px;color:var(--c);font-weight:600;flex:none;white-space:nowrap}
+.r-mood .dot{width:8px;height:8px}
+.r-mood.pending{--c:var(--muted);font-weight:400}
+.r-mood.pending .dot{animation:pulse .9s ease-in-out infinite alternate}
+@keyframes pulse{from{opacity:.2}to{opacity:1}}
+.moodwrap{display:grid;gap:2px}
+.moodbar{display:flex;gap:6px;overflow-x:auto;padding:6px 10px 2px;scrollbar-width:none}
+.moodbar::-webkit-scrollbar{display:none}
+.moodbar .chip{height:32px;font-size:.8rem;flex:none;padding:0 12px}
+.moodbar .chip .dot{width:8px;height:8px}
+.moodnote{padding:0 14px;color:var(--muted);font:400 .74rem var(--f-mono);min-height:1em}
+.moodnote:empty{display:none}
+.r-cmt{align-self:end;display:flex;align-items:center;gap:5px;min-height:44px;padding:0 6px 6px;color:var(--accent);text-decoration:none;font:600 .92rem var(--f-mono);font-variant-numeric:tabular-nums}
+.r-cmt .ic{width:20px;height:20px;fill:currentColor;stroke:none}
+.r-cmt em{font-style:normal;font-size:.7rem;background:var(--accent);color:var(--surface);padding:1px 5px;border-radius:8px}
+.r-more{align-self:end;margin-bottom:6px;color:var(--muted)}
+.row.skel .r-rank b,.row.skel .r-rank span{display:block;background:color-mix(in srgb,var(--band-ink) 18%,transparent);border-radius:4px;width:24px;height:18px}
+.row.skel .r-rank span{width:34px;height:10px}
+.bone{display:block;height:12px;border-radius:6px;background:linear-gradient(90deg,var(--sunk),var(--line),var(--sunk));background-size:200% 100%;animation:shim 1.3s linear infinite}
+@keyframes shim{to{background-position:-200% 0}}
+.more-wrap{display:flex;justify-content:center;padding:10px 0 20px}
+.empty{padding:56px 24px;text-align:center;color:var(--muted);max-width:30rem;margin:0 auto}
+.empty b{display:block;color:var(--ink);font:700 1.1rem var(--f-display);margin-bottom:6px}
+.err{margin:16px;padding:18px;background:var(--surface);border-radius:12px;display:grid;gap:10px;justify-items:start}
+.err b{font:700 1.05rem var(--f-display)}
+.err p{margin:0;color:var(--muted)}
+
+.chips{display:flex;gap:6px;flex-wrap:wrap;padding:10px 12px 4px}
+.chip{height:36px;padding:0 14px;border-radius:18px;border:1px solid var(--line);background:var(--surface);cursor:pointer;font-size:.88rem;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.chip.on{background:var(--pri);color:var(--pri-ink);border-color:var(--pri)}
+
+/* Buttons */
+.btn{height:42px;padding:0 16px;border-radius:9px;border:0;background:var(--pri);color:var(--pri-ink);font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:8px;text-decoration:none;white-space:nowrap}
+.btn .ic{width:18px;height:18px}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+.btn.arm{background:var(--neg);border-color:var(--neg);color:#fff}
+.btn:disabled{opacity:.55;cursor:default}
+.btn-text{border:0;background:none;color:var(--focus);font-weight:700;cursor:pointer;padding:6px 2px;font-size:.86rem}
+.pillbtn{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 14px;border-radius:19px;border:1px solid var(--line);background:var(--sunk);color:var(--ink);text-decoration:none;cursor:pointer;font-size:.88rem;font-weight:700}
+.pillbtn .ic{width:18px;height:18px}
+.pillbtn.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent)}
+.pillbtn.on .ic{fill:currentColor}
+
+/* Thread */
+.story{background:var(--surface);padding:18px 16px 16px}
+.s-title{display:block;font:700 1.4rem/1.22 var(--f-display);letter-spacing:-.012em;text-decoration:none;text-wrap:balance;overflow-wrap:anywhere}
+a.s-title:hover{text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:4px}
+.s-dom{display:inline-block;margin-top:6px;color:var(--accent);font-style:italic;text-decoration:none;overflow-wrap:anywhere}
+.s-meta{margin-top:6px;color:var(--muted);font:400 .8rem/1.5 var(--f-mono)}
+.s-text{margin-top:12px;overflow-wrap:anywhere}
+.s-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+
+/* Mood card */
+.ai{margin:8px 10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 16px 12px}
+.ai-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ai-label{display:inline-flex;gap:6px;align-items:center;font:600 .7rem var(--f-mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-right:auto}
+.ai-label .ic{width:16px;height:16px;color:var(--focus);fill:currentColor;stroke:none}
+.pill{font:700 .78rem/1 var(--f-body);padding:6px 10px;border-radius:999px;background:color-mix(in srgb,var(--c) 15%,transparent);color:var(--c)}
+.v-positive,.s-positive{--c:var(--pos)} .v-negative,.s-negative{--c:var(--neg)} .v-mixed,.s-mixed{--c:var(--mix)} .v-neutral,.s-neutral{--c:var(--neu)}
+.heat-calm{--c:var(--neu)} .heat-lively{--c:var(--mix)} .heat-heated{--c:var(--neg)}
+.ai-score{font:600 .95rem var(--f-mono);font-variant-numeric:tabular-nums}
+.ai-headline{font:700 1.2rem/1.3 var(--f-display);margin:12px 0 12px;text-wrap:balance}
+.split{display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px;background:var(--sunk)}
+.split i{display:block;min-width:0}
+.split .p{background:var(--pos)} .split .n{background:var(--neu)} .split .g{background:var(--neg)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font:400 .76rem var(--f-mono);color:var(--muted);margin-top:7px;font-variant-numeric:tabular-nums}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--c);display:inline-block;flex:none}
+.ai-summary{margin:14px 0 0;max-width:65ch}
+.ai h4{font:600 .7rem var(--f-mono);text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin:16px 0 8px}
+.themes{list-style:none;margin:0;padding:0;display:grid;gap:9px}
+.themes li{display:grid;grid-template-columns:10px minmax(0,1fr);gap:10px;align-items:baseline}
+.themes b{font-weight:700}
+.themes span{color:var(--muted)}
+.reads{display:grid;gap:6px}
+.read-link{display:grid;gap:2px;padding:10px 12px;border-radius:10px;background:var(--sunk);text-decoration:none}
+.read-link:hover{background:color-mix(in srgb,var(--focus) 10%,var(--sunk))}
+.read-link b{font:600 .82rem var(--f-mono);color:var(--focus)}
+.read-link span{font-size:.92rem}
+.ai-new{margin-top:14px;padding:9px 12px;border-radius:9px;background:var(--accent-soft);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:.88rem}
+.ai-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--line);margin-top:14px;padding-top:8px;font:400 .72rem/1.4 var(--f-mono);color:var(--muted)}
+.ai-prompt{display:grid;gap:10px;justify-items:start}
+.ai-prompt h3{margin:4px 0 0;font:700 1.12rem/1.3 var(--f-display);text-wrap:balance}
+.ai-prompt p{margin:0;color:var(--muted);max-width:60ch}
+.ai-prompt .btns{display:flex;gap:8px;flex-wrap:wrap}
+.ai.compact{padding:10px 14px;color:var(--muted);font-size:.9rem}
+.ai-load{display:grid;gap:9px;margin-top:12px}
+.ai-load p{margin:0 0 4px;color:var(--muted)}
+.ai-err{color:var(--neg)}
+.ask{margin:8px 10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:grid;gap:12px}
+.ask-hd{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ask-hd h3{margin:0;font:700 1rem var(--f-display);display:inline-flex;align-items:center;gap:7px}
+.ask-hd .ic{width:16px;height:16px;color:var(--focus);fill:currentColor;stroke:none}
+.qa{display:grid;gap:6px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.q{margin:0;font-weight:700;padding-left:10px;border-left:3px solid var(--focus)}
+.a{max-width:65ch;overflow-wrap:anywhere}
+.a p{margin:0 0 .55em}
+.a ul{margin:0 0 .55em;padding-left:1.2em;display:grid;gap:4px}
+.cite{font:600 .78em var(--f-mono);color:var(--focus);text-decoration:none;background:color-mix(in srgb,var(--focus) 12%,transparent);padding:1px 6px;border-radius:5px;white-space:nowrap}
+.cite:hover{background:color-mix(in srgb,var(--focus) 22%,transparent)}
+.qa-foot{font:400 .72rem var(--f-mono);color:var(--muted)}
+.sugg{display:flex;gap:6px;flex-wrap:wrap}
+.sugg .chip{height:auto;min-height:34px;padding:6px 12px;font-weight:400;text-align:left;background:var(--sunk)}
+.ask-form{display:flex;gap:8px}
+.ask-form .txt{font-family:var(--f-body)}
+.ask-note{margin:0;color:var(--muted);font-size:.8rem}
+
+/* Comments */
+.cm-bar{display:flex;justify-content:space-between;align-items:center;padding:12px 16px 6px}
+.cm-bar h2{margin:0;font:700 1rem var(--f-display)}
+.comments{display:flex;flex-direction:column;gap:6px;padding-bottom:48px}
+.comments>.cm{background:var(--surface);padding:6px 6px 12px 14px}
+.cm{--dc:var(--d1)}
+.cm-head{display:flex;align-items:center;gap:2px;min-height:40px}
+.cm-toggle{flex:1;min-width:0;display:flex;align-items:center;gap:8px;background:none;border:0;padding:4px 0;text-align:left;cursor:pointer;flex-wrap:wrap}
+.cm-by{font:600 .84rem var(--f-mono);color:var(--dc);overflow-wrap:anywhere}
+.op{font:700 .62rem/1 var(--f-mono);background:var(--accent);color:var(--surface);padding:3px 5px;border-radius:4px;letter-spacing:.04em}
+.cm-when{color:var(--muted);font:400 .78rem var(--f-mono)}
+.new{color:var(--accent);font:700 .66rem var(--f-mono);text-transform:uppercase;letter-spacing:.06em}
+.cm-folded{display:none;color:var(--muted);font:400 .76rem var(--f-mono)}
+.cm.collapsed>.cm-body,.cm.collapsed>.cm-kids{display:none}
+.cm.collapsed>.cm-head .cm-folded{display:inline}
+.cm.collapsed>.cm-head .cm-by{opacity:.75}
+.cm-body{overflow-wrap:anywhere;line-height:1.55;padding-right:8px;border-radius:6px;transition:background-color .6s}
+.cm-body p{margin:.6em 0 0}
+.cm-body pre{overflow-x:auto;background:var(--sunk);padding:10px;border-radius:6px;font:400 .8rem/1.45 var(--f-mono);white-space:pre;margin:.6em 0 0}
+.cm-body code{font-family:var(--f-mono);font-size:.88em}
+.cm-body a,.s-text a{color:var(--focus);overflow-wrap:anywhere}
+.cm-kids{margin-top:4px;padding-left:12px;border-left:2px solid color-mix(in srgb,var(--dc) 50%,transparent);display:flex;flex-direction:column;gap:2px}
+.cm-kids.flat{padding-left:6px}
+.cm-more{width:36px;height:36px;color:var(--muted)}
+.cm.flash>.cm-body{background:var(--accent-soft)}
+.muted{color:var(--muted)}
+
+/* Saved comments */
+.scard{background:var(--surface);padding:12px 16px 14px;display:grid;gap:6px}
+.scard-meta{font:400 .78rem var(--f-mono);color:var(--muted)}
+.scard-meta a{color:var(--ink);font-family:var(--f-body);font-weight:700;font-size:.9rem;text-decoration:none}
+.scard .cm-body{max-height:9.5em;overflow:hidden;-webkit-mask-image:linear-gradient(#000 70%,transparent);mask-image:linear-gradient(#000 70%,transparent)}
+.scard-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+/* Overlays */
+.scrim{position:fixed;inset:0;background:rgba(4,14,17,.5);z-index:50;opacity:0;transition:opacity .18s}
+.scrim.open{opacity:1}
+.sheet{position:absolute;left:0;right:0;bottom:0;margin:0 auto;max-width:30rem;background:var(--surface);border-radius:18px 18px 0 0;padding:8px 0 calc(10px + env(safe-area-inset-bottom,0px));transform:translateY(16px);transition:transform .18s;max-height:85vh;overflow-y:auto}
+.scrim.open .sheet{transform:none}
+.sheet-title{padding:12px 20px 8px;font:700 .86rem/1.35 var(--f-body);color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.sheet-item{display:flex;align-items:center;gap:16px;width:100%;padding:13px 20px;border:0;background:none;text-align:left;cursor:pointer;text-decoration:none;font-size:1rem;color:var(--ink)}
+.sheet-item:hover{background:var(--sunk)}
+.sheet-item .ic{color:var(--muted)}
+.drawer{position:absolute;top:0;bottom:0;left:0;width:min(19rem,86vw);background:var(--surface);transform:translateX(-100%);transition:transform .2s;display:flex;flex-direction:column;overflow-y:auto}
+.scrim.open .drawer{transform:none}
+.drawer-head{background:var(--bar);color:var(--bar-ink);border-bottom:1px solid var(--line);padding:calc(22px + env(safe-area-inset-top,0px)) 20px 18px max(20px,env(safe-area-inset-left,0px))}
+.brand{font:800 1.55rem/1 var(--f-display);letter-spacing:-.02em}
+.tag{color:var(--bar-muted);font-size:.84rem;margin-top:6px}
+.nav{padding:8px 0;display:flex;flex-direction:column}
+.nav a,.nav button{display:flex;gap:16px;align-items:center;padding:12px 20px;text-decoration:none;font-weight:700;border:0;background:none;cursor:pointer;text-align:left;width:100%}
+.nav a:hover,.nav button:hover{background:var(--sunk)}
+.nav a.on{background:var(--band);color:var(--band-ink)}
+.nav .ic{color:var(--muted)}
+.nav a.on .ic{color:inherit}
+.nav hr{border:0;border-top:1px solid var(--line);margin:8px 0}
+
+.panel{position:absolute;top:0;bottom:0;right:0;width:100%;max-width:36rem;background:var(--bg);overflow-y:auto;transform:translateX(24px);transition:transform .2s;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}
+.scrim.open .panel{transform:none}
+.panel-hd{position:sticky;top:0;z-index:2;background:var(--bar);color:var(--bar-ink);box-shadow:0 1px 0 var(--line);display:flex;align-items:center;gap:4px;min-height:62px;padding:env(safe-area-inset-top,0px) 6px 0}
+.panel-hd h2{margin:0 0 0 8px;font:700 1.22rem var(--f-display);flex:1}
+.sec{background:var(--surface);margin-top:8px;padding:18px max(16px,env(safe-area-inset-right,0px)) 18px max(16px,env(safe-area-inset-left,0px));display:grid;gap:14px}
+.sec h3{margin:0;font:700 1.08rem var(--f-display)}
+.sec>p{margin:0;color:var(--muted);font-size:.92rem;max-width:62ch}
+.notice{background:var(--accent-soft);padding:10px 12px;border-radius:9px;font-size:.92rem}
+.prov{border:1px solid var(--line);border-radius:12px;padding:14px;display:grid;gap:12px}
+.prov.active{border-color:var(--focus);box-shadow:0 0 0 1px var(--focus)}
+.prov-head{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}
+.prov-name{font:700 1.02rem var(--f-display)}
+.prov-name small{font:400 .8rem var(--f-body);color:var(--muted);margin-left:6px}
+.use{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:.9rem;cursor:pointer}
+.use input{width:18px;height:18px;accent-color:var(--focus);margin:0}
+.badge{font:600 .7rem var(--f-mono);text-transform:uppercase;letter-spacing:.06em;color:var(--focus)}
+.status{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;font:400 .84rem var(--f-mono);color:var(--pos)}
+.status.off{color:var(--muted)}
+.key-row{display:flex;gap:8px}
+.field{display:grid;gap:5px;min-width:0}
+.field>span{font:600 .68rem var(--f-mono);text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.txt{height:42px;border:1px solid var(--line);border-radius:9px;background:var(--sunk);color:var(--ink);padding:0 12px;font:400 max(16px,1rem) var(--f-mono);min-width:0;width:100%}
+.ts-row{display:flex;align-items:center;gap:12px}
+.ts-row input{flex:1;min-width:0;accent-color:var(--focus);height:28px}
+.ts-a{font-family:var(--f-display);font-weight:700;color:var(--muted);line-height:1}
+.ts-val{font:600 .86rem var(--f-mono);min-width:3.4em;text-align:right;font-variant-numeric:tabular-nums}
+.app-row{display:flex;gap:14px;align-items:center}
+.app-row img{width:56px;height:56px;border-radius:13px;flex:none}
+.app-row div{min-width:0}
+.app-row b{display:block;font:700 1rem var(--f-display)}
+.app-row small{color:var(--muted)}
+.steps{margin:0;padding-left:1.3em;display:grid;gap:4px}
+.price-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.price-row .field>span{text-transform:none;letter-spacing:0;font-size:.74rem}
+.spend{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.spend div{background:var(--sunk);border-radius:10px;padding:10px 12px;min-width:0}
+.spend b{display:block;font:600 1.15rem var(--f-mono);font-variant-numeric:tabular-nums}
+.spend small{color:var(--muted);font-size:.76rem}
+.txt:focus{border-color:var(--focus);outline:none;box-shadow:0 0 0 2px color-mix(in srgb,var(--focus) 30%,transparent)}
+.keylink{font-size:.84rem;color:var(--focus);font-weight:700}
+.toggle{display:flex;gap:12px;align-items:flex-start;cursor:pointer}
+.toggle input{width:20px;height:20px;margin:2px 0 0;accent-color:var(--focus);flex:none}
+.toggle small{display:block;color:var(--muted);font-size:.84rem;margin-top:2px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden;align-self:start;justify-self:start}
+.seg label{position:relative;cursor:pointer}
+.seg input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.seg span{display:block;padding:9px 16px;font-weight:700;font-size:.9rem}
+.seg input:checked+span{background:var(--pri);color:var(--pri-ink)}
+.seg input:focus-visible+span{outline:2px solid var(--focus);outline-offset:-3px}
+.drow{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-top:12px;border-top:1px solid var(--line)}
+.drow div{min-width:0}
+.drow b{display:block}
+.drow small{color:var(--muted)}
+
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translate(-50%,16px);background:var(--ink);color:var(--surface);padding:11px 16px;border-radius:10px;opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:90;max-width:calc(100% - 32px);font-weight:700;font-size:.92rem}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+@media (min-width:720px){
+  .list{gap:8px;padding-inline:16px;padding-top:12px}
+  .row{border-radius:12px;overflow:hidden}
+  .comments{padding-inline:12px}
+  .comments>.cm{border-radius:12px}
+  .story{margin:12px 12px 0;border-radius:14px;padding:22px 22px 18px}
+  .ai,.ask{margin:10px 12px}
+  .moodbar{padding-inline:16px}
+  .moodnote{padding-inline:18px}
+  .chips{padding-inline:16px}
+  .scard{border-radius:12px;margin-inline:16px}
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/></g></symbol>
+  <symbol id="i-comment" viewBox="0 0 24 24"><path d="M5 3.5h14A2.5 2.5 0 0 1 21.5 6v9a2.5 2.5 0 0 1-2.5 2.5H10l-4.6 3.7c-.6.5-1.4 0-1.4-.7V17.4A2.5 2.5 0 0 1 2.5 15V6A2.5 2.5 0 0 1 5 3.5zM7 9.2h10v1.6H7zm0 3.2h7V14H7z" fill-rule="evenodd"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M19 12H5M11 5l-7 7 7 7"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7L20 8.5"/><path d="M20 3.5v5h-5"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6.5 3.5h11v17l-5.5-4-5.5 4z"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.2 10.8l7.6-4.1M8.2 13.2l7.6 4.1"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-tune" viewBox="0 0 24 24"><path d="M4 7h9M19 7h1M4 17h3M13 17h7"/><circle cx="16" cy="7" r="2.5"/><circle cx="10" cy="17" r="2.5"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 2.5l2 6.2 6.5 2.3-6.5 2.3-2 6.2-2-6.2L3.5 11 10 8.7zM19 15.5l.9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+  <symbol id="i-fold" viewBox="0 0 24 24"><path d="M7 15l5-5 5 5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13"/></symbol>
+  <symbol id="i-textup" viewBox="0 0 24 24"><path d="M2.5 19l5-13 5 13M4.4 14.5h6.2M18 7v6M15 10h6"/></symbol>
+  <symbol id="i-textdown" viewBox="0 0 24 24"><path d="M2.5 19l5-13 5 13M4.4 14.5h6.2M15 10h6"/></symbol>
+  <symbol id="i-install" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3M10.5 18.5h3"/></symbol>
+  <symbol id="i-trend" viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
+  <symbol id="i-ask" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.9-.9 1.5v.4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-show" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-jobs" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 12.5h18"/></symbol>
+</svg>
+
+<header class="hdr"><div class="hdr-in" id="hdrIn"></div></header>
+<main>
+  <section id="list" class="list" aria-live="polite"></section>
+  <section id="thread" hidden></section>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+'use strict';
+
+/* ---------- constants ---------- */
+const SVGNS = 'http://www.w3.org/2000/svg';
+const FB = 'https://hacker-news.firebaseio.com/v0';
+const ALG = 'https://hn.algolia.com/api/v1';
+const PAGE = 30;
+const FEEDS = {
+  top:  { title: 'Top Stories', ep: 'topstories',  icon: 'trend' },
+  new:  { title: 'New',         ep: 'newstories',  icon: 'clock' },
+  best: { title: 'Best',        ep: 'beststories', icon: 'star' },
+  ask:  { title: 'Ask HN',      ep: 'askstories',  icon: 'ask' },
+  show: { title: 'Show HN',     ep: 'showstories', icon: 'show' },
+  jobs: { title: 'Jobs',        ep: 'jobstories',  icon: 'jobs' },
+};
+const PROVIDERS = {
+  claude: { name: 'Claude', vendor: 'Anthropic', placeholder: 'sk-ant-…', model: 'claude-sonnet-5-5',
+            models: ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5'], keyUrl: 'https://console.anthropic.com/settings/keys' },
+  openai: { name: 'OpenAI', vendor: 'GPT models', placeholder: 'sk-…', model: 'gpt-5.6-luna',
+            models: ['gpt-5.6-luna', 'gpt-5.4-nano', 'gpt-5.6-sol'], keyUrl: 'https://platform.openai.com/api-keys' },
+  gemini: { name: 'Gemini', vendor: 'Google', placeholder: 'AIza…', model: 'gemini-3.6-flash',
+            models: ['gemini-3.6-flash', 'gemini-3.1-pro-preview'], keyUrl: 'https://aistudio.google.com/apikey' },
+};
+
+/* ---------- tiny DOM helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+function h(tag, props, ...kids) {
+  const el = document.createElement(tag);
+  if (props) for (const [k, v] of Object.entries(props)) {
+    if (v == null || v === false) continue;
+    if (k === 'class') el.className = v;
+    else if (k === 'text') el.textContent = v;
+    else if (k === 'value') el.value = v;
+    else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false && k !== '') el.append(k.nodeType ? k : String(k));
+  return el;
+}
+function fill(el, ...kids) {
+  el.replaceChildren();
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false && k !== '') el.append(k.nodeType ? k : String(k));
+  return el;
+}
+function icon(name, cls) {
+  const s = document.createElementNS(SVGNS, 'svg');
+  s.setAttribute('class', 'ic' + (cls ? ' ' + cls : ''));
+  s.setAttribute('aria-hidden', 'true');
+  const u = document.createElementNS(SVGNS, 'use');
+  u.setAttribute('href', '#i-' + name);
+  s.append(u);
+  return s;
+}
+const iconBtn = (name, label, fn, cls) =>
+  h('button', { class: 'icon-btn' + (cls ? ' ' + cls : ''), type: 'button', 'aria-label': label, title: label, onclick: fn }, icon(name));
+const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+const hnUrl = id => `https://news.ycombinator.com/item?id=${id}`;
+function domain(url) { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } }
+function ago(t) {
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 60) return 'now';
+  const m = s / 60; if (m < 60) return Math.floor(m) + 'm';
+  const hr = m / 60; if (hr < 24) return Math.floor(hr) + 'h';
+  const d = hr / 24; if (d < 30) return Math.floor(d) + 'd';
+  if (d < 365) return Math.floor(d / 30) + 'mo';
+  return Math.floor(d / 365) + 'y';
+}
+function agoWords(ms) {
+  const s = (Date.now() - ms) / 1000;
+  if (s < 45) return 'just now';
+  const m = Math.round(s / 60); if (m < 60) return `${m} min ago`;
+  const hr = Math.round(m / 60); if (hr < 24) return `${hr} h ago`;
+  return new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+const plural = (n, one, many) => `${n} ${n === 1 ? one : (many || one + 's')}`;
+
+/* ---------- preferences (non-secret) ---------- */
+const PREF_KEY = 'uc.prefs';
+const prefs = Object.assign({ theme: 'system', provider: null, models: {}, autorun: true, textScale: 1,
+  monthlyCap: 5, prices: {}, prereadModels: {} },
+  (() => { try { return JSON.parse(localStorage.getItem(PREF_KEY)) || {}; } catch { return {}; } })());
+prefs.preread = Object.assign({ on: false, count: 10, dailyCap: 0.5 }, prefs.preread);
+function savePrefs() { try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch {} }
+
+/* ---------- storage: IndexedDB with in-memory fallback ---------- */
+const DB_NAME = 'undercurrent';
+const STORES = ['kv', 'secrets', 'saved', 'seen', 'analysis'];
+const mem = Object.fromEntries(STORES.map(s => [s, new Map()]));
+let dbPromise = null, memOnly = false;
+function openDb() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((res, rej) => {
+    let r;
+    try { r = indexedDB.open(DB_NAME, 1); } catch (e) { return rej(e); }
+    r.onupgradeneeded = () => { const d = r.result; STORES.forEach(s => { if (!d.objectStoreNames.contains(s)) d.createObjectStore(s); }); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+    r.onblocked = () => rej(new Error('blocked'));
+  }).catch(() => { memOnly = true; return null; });
+  return dbPromise;
+}
+function idbReq(d, store, mode, fn) {
+  return new Promise((res, rej) => {
+    const t = d.transaction(store, mode);
+    const r = fn(t.objectStore(store));
+    let out;
+    r.onsuccess = () => { out = r.result; };
+    t.oncomplete = () => res(out);
+    t.onerror = () => rej(t.error);
+    t.onabort = () => rej(t.error || new Error('aborted'));
+  });
+}
+const S = {
+  async get(s, k)    { const d = await openDb(); return d ? idbReq(d, s, 'readonly', st => st.get(k)) : mem[s].get(k); },
+  async put(s, k, v) { const d = await openDb(); return d ? idbReq(d, s, 'readwrite', st => st.put(v, k)) : void mem[s].set(k, v); },
+  async del(s, k)    { const d = await openDb(); return d ? idbReq(d, s, 'readwrite', st => st.delete(k)) : void mem[s].delete(k); },
+  async values(s)    { const d = await openDb(); return d ? idbReq(d, s, 'readonly', st => st.getAll()) : [...mem[s].values()]; },
+  async keys(s)      { const d = await openDb(); return d ? idbReq(d, s, 'readonly', st => st.getAllKeys()) : [...mem[s].keys()]; },
+  async count(s)     { const d = await openDb(); return d ? idbReq(d, s, 'readonly', st => st.count()) : mem[s].size; },
+  async clear(s)     { const d = await openDb(); return d ? idbReq(d, s, 'readwrite', st => st.clear()) : void mem[s].clear(); },
+};
+
+/* ---------- secrets: AES-GCM with a non-extractable device key ---------- */
+const te = new TextEncoder(), td = new TextDecoder();
+const cryptoOK = !!(window.isSecureContext && window.crypto && crypto.subtle);
+async function deviceKey() {
+  let k = await S.get('kv', 'deviceKey');
+  if (!k) {
+    k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await S.put('kv', 'deviceKey', k);
+  }
+  return k;
+}
+async function saveSecret(pid, value) {
+  const key = await deviceKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: te.encode('uc:' + pid) }, key, te.encode(value));
+  await S.put('secrets', pid, { iv, ct, hint: value.slice(-4), saved: Date.now() });
+}
+async function readSecret(pid) {
+  const rec = await S.get('secrets', pid);
+  if (!rec || !cryptoOK) return null;
+  try {
+    const key = await deviceKey();
+    return td.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: rec.iv, additionalData: te.encode('uc:' + pid) }, key, rec.ct));
+  } catch { return null; }
+}
+async function savedProviders() {
+  const ks = await S.keys('secrets').catch(() => []);
+  return Object.keys(PROVIDERS).filter(p => ks.includes(p));
+}
+function activeProvider(saved) {
+  if (!saved.length) return null;
+  if (saved.length === 1) return saved[0];
+  return saved.includes(prefs.provider) ? prefs.provider : null;
+}
+
+/* ---------- app state ---------- */
+const listEl = $('#list'), threadEl = $('#thread'), hdrIn = $('#hdrIn'), toastEl = $('#toast');
+const state = {
+  view: null, listKey: null, listReady: false, listScroll: new Map(),
+  ids: [], shown: 0, updated: 0, items: new Map(),
+  seen: new Map(), saved: new Map(),
+  thread: null, navTok: 0, navCount: 0, lastList: '#/top',
+  inflight: new Map(), searchSort: 'relevance', searchCache: new Map(),
+  moods: new Map(), moodFilter: { verdict: null, hideHeated: false }, ledger: null, prereadMsg: null,
+};
+
+/* ---------- network ---------- */
+async function getJSON(url, timeout = 15000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeout);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, credentials: 'omit', referrerPolicy: 'no-referrer' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return await r.json();
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('The request timed out.');
+    if (e instanceof TypeError) throw new Error('Network request failed. Check your connection.');
+    throw e;
+  } finally { clearTimeout(t); }
+}
+async function getItem(id, fresh = false) {
+  const c = state.items.get(id);
+  if (c && !fresh && Date.now() - c.at < 120000) return c.v;
+  const v = await getJSON(`${FB}/item/${id}.json`);
+  if (v) state.items.set(id, { v, at: Date.now() });
+  return v;
+}
+function limiter(n) {
+  let active = 0; const q = [];
+  const next = () => {
+    if (active >= n || !q.length) return;
+    active++;
+    const { fn, res, rej } = q.shift();
+    fn().then(res, rej).finally(() => { active--; next(); });
+  };
+  return fn => new Promise((res, rej) => { q.push({ fn, res, rej }); next(); });
+}
+function fromAlgolia(n, parent) {
+  const node = { id: n.id, by: n.author, time: n.created_at_i, html: n.text, deleted: !n.author || n.text == null, kids: [], parent };
+  for (const c of n.children || []) { const k = fromAlgolia(c, n.id); if (k) node.kids.push(k); }
+  if (node.deleted && !node.kids.length) return null;
+  return node;
+}
+async function algoliaTree(id) {
+  const root = await getJSON(`${ALG}/items/${id}`, 20000);
+  return (root.children || []).map(c => fromAlgolia(c, id)).filter(Boolean);
+}
+async function firebaseTree(story) {
+  let budget = 1500;
+  const q = limiter(12);
+  async function load(id, parent) {
+    if (budget-- <= 0) return null;
+    const it = await q(() => getJSON(`${FB}/item/${id}.json`)).catch(() => null);
+    if (!it || it.dead) return null;
+    const node = { id: it.id, by: it.by, time: it.time, html: it.text, deleted: !!it.deleted, kids: [], parent };
+    node.kids = (await Promise.all((it.kids || []).map(k => load(k, it.id)))).filter(Boolean);
+    if (node.deleted && !node.kids.length) return null;
+    return node;
+  }
+  return (await Promise.all((story.kids || []).map(k => load(k, story.id)))).filter(Boolean);
+}
+function countTree(list) { let n = 0; for (const c of list) { if (!c.deleted) n++; n += countTree(c.kids); } return n; }
+
+/* ---------- HTML sanitizer for HN comment markup ---------- */
+const ALLOWED = new Set(['P', 'A', 'I', 'EM', 'B', 'STRONG', 'CODE', 'PRE', 'BR', 'U']);
+function safeHref(href) {
+  if (!href) return null;
+  let u;
+  try { u = new URL(href, 'https://news.ycombinator.com/'); } catch { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const id = u.searchParams.get('id');
+  if (u.hostname === 'news.ycombinator.com' && u.pathname === '/item' && /^\d+$/.test(id || '')) return { href: '#/hn/' + id, internal: true };
+  return { href: u.href };
+}
+function sanitize(html) {
+  const doc = new DOMParser().parseFromString(`<body>${html || ''}</body>`, 'text/html');
+  const frag = document.createDocumentFragment();
+  (function walk(src, dst) {
+    for (const n of src.childNodes) {
+      if (n.nodeType === 3) dst.append(n.textContent);
+      else if (n.nodeType === 1) {
+        if (!ALLOWED.has(n.tagName)) { walk(n, dst); continue; }
+        const el = document.createElement(n.tagName.toLowerCase());
+        if (n.tagName === 'A') {
+          const l = safeHref(n.getAttribute('href'));
+          if (!l) { walk(n, dst); continue; }
+          el.href = l.href;
+          if (!l.internal) { el.target = '_blank'; el.rel = 'noopener noreferrer nofollow'; }
+        }
+        walk(n, el);
+        dst.append(el);
+      }
+    }
+  })(doc.body, frag);
+  return frag;
+}
+function plain(html) {
+  if (!html) return '';
+  const d = new DOMParser().parseFromString(html, 'text/html');
+  d.querySelectorAll('p').forEach(p => p.prepend(' '));
+  return d.body.textContent.replace(/\s+/g, ' ').trim();
+}
+
+/* ---------- small UI pieces ---------- */
+let toastTimer;
+function toast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2400);
+}
+async function copy(text, msg) {
+  try { await navigator.clipboard.writeText(text); toast(msg); return; } catch {}
+  const ta = h('textarea', { class: 'vh', readonly: true }); ta.value = text;
+  document.body.append(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  ta.remove();
+  toast(ok ? msg : 'Copy failed. Long-press the address bar to copy instead.');
+}
+function appLink(path) {
+  if (!/^https?:$/.test(location.protocol)) return null;
+  return location.origin + location.pathname + location.search + '#/' + path;
+}
+async function share({ title, path, hnId }) {
+  const url = appLink(path) || hnUrl(hnId);
+  if (navigator.share) {
+    try { await navigator.share({ title, url }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  copy(url, appLink(path) ? 'Link copied' : 'Hacker News link copied');
+}
+function openOverlay(inner, cls) {
+  const scrim = h('div', { class: 'scrim ' + (cls || '') }, inner);
+  const close = () => {
+    scrim.classList.remove('open');
+    document.removeEventListener('keydown', onKey);
+    setTimeout(() => scrim.remove(), 200);
+    scrim.dispatchEvent(new Event('closed'));
+  };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  scrim.addEventListener('click', e => { if (e.target === scrim) close(); });
+  document.addEventListener('keydown', onKey);
+  document.body.append(scrim);
+  requestAnimationFrame(() => scrim.classList.add('open'));
+  scrim.close = close;
+  return scrim;
+}
+function openSheet(title, items) {
+  const sheet = h('div', { class: 'sheet', role: 'menu', 'aria-label': title || 'Actions' },
+    title && h('div', { class: 'sheet-title', text: title }));
+  const ov = openOverlay(sheet);
+  for (const it of items.filter(Boolean)) {
+    const kids = [icon(it.icon), h('span', { text: it.label })];
+    const el = it.href
+      ? h('a', { class: 'sheet-item', role: 'menuitem', href: it.href, ...(it.href.startsWith('#') ? {} : { target: '_blank', rel: 'noopener noreferrer' }), onclick: () => ov.close() }, kids)
+      : h('button', { class: 'sheet-item', role: 'menuitem', type: 'button', onclick: () => { ov.close(); it.run(); } }, kids);
+    sheet.append(el);
+  }
+  setTimeout(() => sheet.querySelector('.sheet-item')?.focus(), 30);
+}
+function errorBox(title, err, retry) {
+  return h('div', { class: 'err', role: 'alert' }, h('b', { text: title }), h('p', { text: err?.message || String(err || '') }),
+    retry && h('button', { class: 'btn ghost', type: 'button', onclick: retry }, icon('refresh'), 'Try again'));
+}
+function skeletonRows(n) {
+  return Array.from({ length: n }, (_, i) => h('div', { class: 'row skel', 'aria-hidden': 'true' },
+    h('div', { class: 'r-rank' }, h('b'), h('span')),
+    h('div', { class: 'r-main' }, h('span', { class: 'bone', style: `width:${80 - (i % 3) * 12}%` }), h('span', { class: 'bone', style: 'width:42%;margin-top:6px' }), h('span', { class: 'bone', style: 'width:28%;margin-top:6px' })),
+    h('span'), h('span')));
+}
+
+/* ---------- header ---------- */
+function setHeader({ back, title, sub, actions = [] }) {
+  const lead = back ? iconBtn('back', 'Back', goBack) : iconBtn('menu', 'Menu', openDrawer);
+  hdrIn.replaceChildren(lead,
+    h('div', { class: 'hd-titles' }, h('h1', { class: 'hd-title', text: title }), sub != null && h('div', { class: 'hd-sub', id: 'hdSub', text: sub })),
+    ...actions);
+}
+function goBack() {
+  if (state.navCount > 0 && history.length > 1) history.back();
+  else location.hash = state.lastList || '#/top';
+}
+function feedSub() { return state.updated ? `Updated ${agoWords(state.updated)}` : 'Loading…'; }
+setInterval(() => {
+  const el = $('#hdSub');
+  if (el && state.view === 'list' && state.listKey?.startsWith('feed:')) el.textContent = state.prereadMsg || feedSub();
+}, 30000);
+
+/* ---------- drawer ---------- */
+function openDrawer() {
+  const cur = location.hash.replace(/^#\/?/, '').split('/')[0] || 'top';
+  const nav = h('nav', { class: 'nav', 'aria-label': 'Sections' },
+    Object.entries(FEEDS).map(([k, f]) => h('a', { href: '#/' + k, class: cur === k ? 'on' : null, 'aria-current': cur === k ? 'page' : null }, icon(f.icon), f.title)),
+    h('hr'),
+    h('a', { href: '#/saved', class: cur === 'saved' ? 'on' : null }, icon('bookmark'), 'Saved'),
+    h('a', { href: '#/search/' }, icon('search'), 'Search'),
+    h('button', { type: 'button', onclick: () => { ov.close(); openSettings(); } }, icon('tune'), 'Settings'),
+    canOfferInstall() && h('button', { type: 'button', onclick: async () => {
+      ov.close();
+      if (!(await promptInstall())) openSettings('set-install');
+    } }, icon('install'), 'Install app'));
+  const drawer = h('aside', { class: 'drawer', 'aria-label': 'Menu' },
+    h('div', { class: 'drawer-head' }, h('div', { class: 'brand', text: 'Undercurrent' }), h('div', { class: 'tag', text: 'Hacker News, with the mood read first' })),
+    nav);
+  const ov = openOverlay(drawer);
+  nav.addEventListener('click', e => { if (e.target.closest('a')) ov.close(); });
+  setTimeout(() => nav.querySelector('a')?.focus(), 30);
+}
+
+/* ---------- read / visit tracking ---------- */
+function markRead(id) {
+  const rec = { ...(state.seen.get(id) || { id }), read: Date.now() };
+  state.seen.set(id, rec); S.put('seen', id, rec).catch(() => {});
+  document.querySelectorAll(`.row[data-id="${id}"]`).forEach(r => r.classList.add('read'));
+}
+function markUnread(id) {
+  const rec = { ...(state.seen.get(id) || { id }) };
+  delete rec.read; state.seen.set(id, rec); S.put('seen', id, rec).catch(() => {});
+  document.querySelectorAll(`.row[data-id="${id}"]`).forEach(r => r.classList.remove('read'));
+}
+function markVisit(story, total) {
+  const rec = { ...(state.seen.get(story.id) || { id: story.id }), read: Date.now(), visit: Math.floor(Date.now() / 1000), count: story.descendants ?? total };
+  state.seen.set(story.id, rec); S.put('seen', story.id, rec).catch(() => {});
+}
+async function pruneSeen() {
+  if (state.seen.size < 6000) return;
+  const old = [...state.seen.values()].sort((a, b) => Math.max(a.read || 0, (a.visit || 0) * 1000) - Math.max(b.read || 0, (b.visit || 0) * 1000)).slice(0, 1500);
+  for (const r of old) { state.seen.delete(r.id); S.del('seen', r.id).catch(() => {}); }
+}
+
+/* ---------- saving ---------- */
+function storySnap(it) { return { key: 's' + it.id, kind: 'story', id: it.id, title: it.title, url: it.url || null, by: it.by, time: it.time, score: it.score, descendants: it.descendants, type: it.type, savedAt: Date.now() }; }
+async function toggleSaveStory(it) {
+  const k = 's' + it.id;
+  if (state.saved.has(k)) { state.saved.delete(k); await S.del('saved', k).catch(() => {}); toast('Removed from saved'); }
+  else { const s = storySnap(it); state.saved.set(k, s); await S.put('saved', k, s).catch(() => {}); toast('Story saved'); }
+  syncSaveButtons();
+}
+async function toggleSaveComment(n, story) {
+  const k = 'c' + n.id;
+  if (state.saved.has(k)) { state.saved.delete(k); await S.del('saved', k).catch(() => {}); toast('Comment removed from saved'); }
+  else {
+    const s = { key: k, kind: 'comment', id: n.id, by: n.by, time: n.time, html: n.html, storyId: story.id, storyTitle: story.title, savedAt: Date.now() };
+    state.saved.set(k, s); await S.put('saved', k, s).catch(() => {}); toast('Comment saved');
+  }
+}
+function syncSaveButtons() {
+  document.querySelectorAll('[data-save-story]').forEach(b => {
+    const on = state.saved.has('s' + b.dataset.saveStory);
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on);
+    b.lastChild.textContent = on ? 'Saved' : 'Save';
+  });
+}
+
+/* ---------- story rows ---------- */
+function rowEl(it, rank) {
+  const seen = state.seen.get(it.id);
+  const thread = `#/item/${it.id}`;
+  const dom = domain(it.url);
+  const newN = seen?.count != null && (it.descendants || 0) > seen.count ? it.descendants - seen.count : 0;
+  const title = h('a', it.url
+    ? { class: 'r-title', href: it.url, target: '_blank', rel: 'noopener noreferrer', onclick: () => markRead(it.id), onauxclick: () => markRead(it.id) }
+    : { class: 'r-title', href: thread }, it.title || '(untitled)');
+  const main = h('div', { class: 'r-main' }, title,
+    dom && h('div', { class: 'r-dom', text: dom }),
+    h('div', { class: 'r-meta' }, h('span', { class: 'r-when', text: `${ago(it.time)} · ${it.by || 'unknown'}` }), moodChip(it.id)));
+  main.addEventListener('click', e => { if (!e.target.closest('a')) location.hash = thread; });
+  const mood = state.moods.get(it.id);
+  return h('article', { class: 'row' + (seen?.read ? ' read' : ''), 'data-id': it.id, 'data-mood': mood?.verdict, 'data-heat': mood?.heat },
+    h('a', { class: 'r-rank', href: thread, tabindex: '-1', 'aria-hidden': 'true' },
+      h('b', { text: rank }), h('span', { text: it.type === 'job' ? 'job' : `${it.score ?? 0}p` })),
+    main,
+    it.type === 'job' ? h('span') : h('a', { class: 'r-cmt', href: thread, 'aria-label': `${plural(it.descendants || 0, 'comment')}${newN ? `, ${newN} new` : ''}` },
+      icon('comment'), h('span', { text: it.descendants || 0 }), newN ? h('em', { text: '+' + newN }) : null),
+    iconBtn('more', 'More actions', () => storyMenu(it), 'r-more'));
+}
+function storyMenu(it) {
+  const saved = state.saved.has('s' + it.id);
+  const read = !!state.seen.get(it.id)?.read;
+  const mood = state.moods.get(it.id);
+  const canRead = it.type !== 'job' && (it.descendants || 0) > 0;
+  openSheet(it.title, [
+    { icon: 'comment', label: 'Open discussion', href: `#/item/${it.id}` },
+    canRead && { icon: 'spark', label: !mood ? 'Analyze mood' : mood.kind === 'preread' ? 'Re-analyze mood in full' : 'Re-analyze mood', run: () => analyzeFromList(it) },
+    { icon: 'share', label: 'Share discussion', run: () => share({ title: it.title, path: `item/${it.id}`, hnId: it.id }) },
+    it.url && { icon: 'link', label: 'Copy article link', run: () => copy(it.url, 'Article link copied') },
+    { icon: 'link', label: 'Copy Hacker News link', run: () => copy(hnUrl(it.id), 'Hacker News link copied') },
+    { icon: 'bookmark', label: saved ? 'Remove from saved' : 'Save story', run: () => toggleSaveStory(it) },
+    { icon: 'check', label: read ? 'Mark as unread' : 'Mark as read', run: () => read ? markUnread(it.id) : markRead(it.id) },
+    { icon: 'external', label: 'Open on Hacker News', href: hnUrl(it.id) },
+  ]);
+}
+function refreshRows() {
+  listEl.querySelectorAll('.row[data-id]').forEach(r => {
+    const id = +r.dataset.id, seen = state.seen.get(id);
+    r.classList.toggle('read', !!seen?.read);
+    const it = state.items.get(id)?.v;
+    const em = r.querySelector('.r-cmt em');
+    if (seen?.count != null && em && it && (it.descendants || 0) <= seen.count) em.remove();
+    else if (seen?.visit && em) em.remove();
+  });
+}
+
+/* ---------- views ---------- */
+function setView(v) {
+  if (state.view === 'list' && v !== 'list' && state.listKey) state.listScroll.set(state.listKey, window.scrollY);
+  state.view = v;
+  listEl.hidden = v !== 'list';
+  threadEl.hidden = v !== 'thread';
+}
+function restoreScroll(key) { requestAnimationFrame(() => window.scrollTo(0, state.listScroll.get(key) || 0)); }
+
+async function showFeed(feed, force = false) {
+  const key = 'feed:' + feed;
+  state.lastList = '#/' + feed;
+  const f = FEEDS[feed];
+  setHeader({ title: f.title, sub: state.listKey === key ? feedSub() : 'Loading…', actions: [
+    iconBtn('search', 'Search', () => { location.hash = '#/search/'; }),
+    iconBtn('more', 'More', () => openSheet(null, [
+      { icon: 'refresh', label: 'Refresh', run: () => showFeed(feed, true) },
+      { icon: 'bookmark', label: 'Saved', href: '#/saved' },
+      ...textItems(),
+      { icon: 'tune', label: 'Settings', run: openSettings },
+    ])),
+  ] });
+  const reuse = !force && state.listKey === key && state.listReady && Date.now() - state.updated < 10 * 60e3;
+  setView('list');
+  if (reuse) { refreshRows(); applyMoodFilter(); restoreScroll(key); return; }
+  const tok = ++state.navTok;
+  state.moodFilter = { verdict: null, hideHeated: false };
+  state.listKey = key; state.listReady = false; state.listScroll.delete(key);
+  listEl.replaceChildren(...skeletonRows(8));
+  window.scrollTo(0, 0);
+  try {
+    const ids = await getJSON(`${FB}/${f.ep}.json`);
+    if (tok !== state.navTok) return;
+    state.ids = ids || []; state.shown = 0; state.updated = Date.now();
+    const frag = await nextPage();
+    if (tok !== state.navTok) return;
+    listEl.replaceChildren(frag);
+    if (!listEl.childElementCount) listEl.append(h('div', { class: 'empty' }, h('b', { text: 'Nothing here right now' }), 'Hacker News returned an empty list. Try refreshing in a minute.'));
+    state.listReady = true;
+    if (state.moods.size || prefs.preread.on) listEl.prepend(moodBar());
+    appendMore(key);
+    applyMoodFilter();
+    const sub = $('#hdSub'); if (sub) sub.textContent = feedSub();
+    prereadFeed();
+  } catch (e) {
+    if (tok !== state.navTok) return;
+    listEl.replaceChildren(errorBox("Couldn't load stories", e, () => showFeed(feed, true)));
+  }
+}
+async function nextPage() {
+  const start = state.shown;
+  const slice = state.ids.slice(start, start + PAGE);
+  state.shown += slice.length;
+  const items = await Promise.all(slice.map(id => getItem(id).catch(() => null)));
+  const frag = document.createDocumentFragment();
+  items.forEach((it, i) => { if (it && !it.deleted && !it.dead) frag.append(rowEl(it, start + i + 1)); });
+  return frag;
+}
+function appendMore(key) {
+  if (state.shown >= state.ids.length) return;
+  const btn = h('button', { class: 'btn ghost', type: 'button' }, 'Load more');
+  const wrap = h('div', { class: 'more-wrap' }, btn);
+  listEl.append(wrap);
+  let busy = false, io = null;
+  async function load() {
+    if (busy) return; busy = true;
+    btn.textContent = 'Loading…';
+    try {
+      const frag = await nextPage();
+      if (state.listKey !== key) return;
+      io?.disconnect();
+      wrap.replaceWith(frag);
+      appendMore(key);
+      applyMoodFilter();
+    } catch { btn.textContent = 'Try again'; busy = false; }
+  }
+  btn.addEventListener('click', load);
+  if ('IntersectionObserver' in window) {
+    io = new IntersectionObserver(es => { if (es[0].isIntersecting && state.view === 'list' && !moodFilterOn()) load(); }, { rootMargin: '600px' });
+    io.observe(wrap);
+  }
+}
+
+async function showSearch(q) {
+  state.lastList = '#/search/' + encodeURIComponent(q);
+  const input = h('input', { class: 'hd-input', id: 'q', type: 'search', placeholder: 'Search Hacker News', value: q, enterkeyhint: 'search', autocomplete: 'off', 'aria-label': 'Search Hacker News' });
+  const form = h('form', { class: 'hd-search', role: 'search', onsubmit: e => {
+    e.preventDefault();
+    const v = input.value.trim();
+    if (v) location.hash = '#/search/' + encodeURIComponent(v);
+  } }, input);
+  hdrIn.replaceChildren(iconBtn('back', 'Back', goBack), form);
+  setView('list');
+  if (!q) {
+    state.listKey = 'search:'; state.listReady = false;
+    listEl.replaceChildren(h('div', { class: 'empty' }, h('b', { text: 'Search every story on Hacker News' }), 'Results come from the Algolia HN index and open with the same mood read as any other thread.'));
+    setTimeout(() => input.focus(), 50);
+    return;
+  }
+  const key = `search:${state.searchSort}:${q}`;
+  if (state.listKey === key && state.listReady) { refreshRows(); restoreScroll(key); return; }
+  const tok = ++state.navTok;
+  state.listKey = key; state.listReady = false;
+  const chips = h('div', { class: 'chips', role: 'group', 'aria-label': 'Sort results' },
+    [['relevance', 'Most relevant'], ['date', 'Newest']].map(([k, label]) =>
+      h('button', { class: 'chip' + (state.searchSort === k ? ' on' : ''), type: 'button', 'aria-pressed': state.searchSort === k, onclick: () => { state.searchSort = k; showSearch(q); } }, label)));
+  listEl.replaceChildren(chips, ...skeletonRows(6));
+  window.scrollTo(0, 0);
+  try {
+    let hits = state.searchCache.get(key);
+    if (!hits) {
+      const ep = state.searchSort === 'date' ? 'search_by_date' : 'search';
+      const r = await getJSON(`${ALG}/${ep}?tags=story&hitsPerPage=50&query=${encodeURIComponent(q)}`);
+      hits = (r.hits || []).map(x => ({ id: +x.objectID, title: x.title, url: x.url, by: x.author, time: x.created_at_i, score: x.points, descendants: x.num_comments, type: 'story' }));
+      state.searchCache.set(key, hits);
+    }
+    if (tok !== state.navTok) return;
+    listEl.replaceChildren(chips, ...(hits.length ? hits.map((it, i) => rowEl(it, i + 1)) : [h('div', { class: 'empty' }, h('b', { text: 'No stories match' }), `Nothing on Hacker News matches “${q}”. Try fewer or different words.`)]));
+    state.listReady = true;
+  } catch (e) {
+    if (tok !== state.navTok) return;
+    listEl.replaceChildren(chips, errorBox('Search failed', e, () => { state.searchCache.delete(key); showSearch(q); }));
+  }
+}
+
+function showSaved(tab) {
+  state.lastList = '#/saved' + (tab === 'comments' ? '/comments' : '');
+  const stories = [...state.saved.values()].filter(s => s.kind === 'story').sort((a, b) => b.savedAt - a.savedAt);
+  const comments = [...state.saved.values()].filter(s => s.kind === 'comment').sort((a, b) => b.savedAt - a.savedAt);
+  setHeader({ title: 'Saved', sub: `${plural(stories.length, 'story', 'stories')} · ${plural(comments.length, 'comment')}`, actions: [iconBtn('tune', 'Settings', openSettings)] });
+  setView('list');
+  ++state.navTok;
+  state.listKey = 'saved'; state.listReady = false;
+  const chips = h('div', { class: 'chips', role: 'tablist' },
+    h('a', { class: 'chip' + (tab !== 'comments' ? ' on' : ''), href: '#/saved', role: 'tab', 'aria-selected': tab !== 'comments' }, `Stories ${stories.length}`),
+    h('a', { class: 'chip' + (tab === 'comments' ? ' on' : ''), href: '#/saved/comments', role: 'tab', 'aria-selected': tab === 'comments' }, `Comments ${comments.length}`));
+  const body = tab === 'comments'
+    ? (comments.length ? comments.map(savedCommentCard) : [h('div', { class: 'empty' }, h('b', { text: 'No saved comments' }), 'Open the menu on any comment and choose Save comment. It will be kept here, on this device only.')])
+    : (stories.length ? stories.map((s, i) => rowEl(s, i + 1)) : [h('div', { class: 'empty' }, h('b', { text: 'No saved stories' }), 'Use the menu on any story to save it. Saved items live in this browser and never leave it.')]);
+  listEl.replaceChildren(chips, ...body);
+  window.scrollTo(0, 0);
+}
+function savedCommentCard(s) {
+  const card = h('article', { class: 'scard' },
+    h('div', { class: 'scard-meta' }, `${s.by} · ${ago(s.time)} · on `, h('a', { href: `#/item/${s.storyId}`, text: s.storyTitle || 'a story' })),
+    h('div', { class: 'cm-body' }, sanitize(s.html)),
+    h('div', { class: 'scard-actions' },
+      h('a', { class: 'pillbtn', href: `#/item/${s.storyId}/${s.id}` }, icon('comment'), 'Open in thread'),
+      h('button', { class: 'pillbtn', type: 'button', onclick: () => share({ title: `${s.by} on “${s.storyTitle}”`, path: `item/${s.storyId}/${s.id}`, hnId: s.id }) }, icon('share'), 'Share'),
+      h('button', { class: 'pillbtn', type: 'button', onclick: async () => { state.saved.delete(s.key); await S.del('saved', s.key).catch(() => {}); card.remove(); toast('Removed'); } }, icon('trash'), 'Remove')));
+  return card;
+}
+
+/* ---------- thread ---------- */
+function threadHeader(story, total) {
+  setHeader({ back: true, title: story.title || 'Comments', sub: `${story.type === 'job' ? 'Job' : `${story.score ?? 0} points`} · ${plural(total, 'comment')}`, actions: [
+    iconBtn('share', 'Share discussion', () => share({ title: story.title, path: `item/${story.id}`, hnId: story.id })),
+    iconBtn('more', 'More', () => openSheet(story.title, [
+      { icon: 'refresh', label: 'Refresh thread', run: () => { state.thread = null; showThread(story.id); } },
+      ...textItems(),
+      story.url && { icon: 'link', label: 'Copy article link', run: () => copy(story.url, 'Article link copied') },
+      { icon: 'link', label: 'Copy Hacker News link', run: () => copy(hnUrl(story.id), 'Hacker News link copied') },
+      { icon: 'external', label: 'Open on Hacker News', href: hnUrl(story.id) },
+      { icon: 'tune', label: 'Settings', run: openSettings },
+    ])),
+  ] });
+}
+async function resolveHn(id) {
+  setView('thread');
+  setHeader({ back: true, title: 'Finding thread…' });
+  threadEl.replaceChildren(h('div', { class: 'empty', text: 'Looking up where this item lives…' }));
+  try {
+    let cur = await getItem(id, true), hops = 0;
+    if (!cur) throw new Error('That item does not exist.');
+    while (cur && cur.type === 'comment' && hops++ < 60) cur = await getItem(cur.parent);
+    if (!cur) throw new Error('Could not find the story this belongs to.');
+    location.replace(cur.id === id ? `#/item/${id}` : `#/item/${cur.id}/${id}`);
+  } catch (e) {
+    threadEl.replaceChildren(errorBox("Couldn't open that link", e, () => resolveHn(id)));
+  }
+}
+async function showThread(id, focusId) {
+  if (state.thread?.id === id && state.thread.ready) {
+    threadHeader(state.thread.story, state.thread.total);
+    setView('thread');
+    if (focusId) focusComment(focusId); else window.scrollTo(0, 0);
+    return;
+  }
+  const tok = ++state.navTok;
+  setView('thread');
+  window.scrollTo(0, 0);
+  state.thread = { id, ready: false, nodes: new Map() };
+  setHeader({ back: true, title: 'Comments', sub: 'Loading…' });
+  threadEl.replaceChildren(h('div', { class: 'story' }, h('span', { class: 'bone', style: 'width:85%;height:20px' }), h('span', { class: 'bone', style: 'width:40%;margin-top:12px' })),
+    h('div', { class: 'ai' }, h('span', { class: 'bone', style: 'width:30%' }), h('span', { class: 'bone', style: 'width:90%;margin-top:14px' }), h('span', { class: 'bone', style: 'width:70%;margin-top:8px' })));
+  const [fbR, algR] = await Promise.allSettled([getItem(id, true), algoliaTree(id)]);
+  if (tok !== state.navTok) return;
+  const story = fbR.status === 'fulfilled' ? fbR.value : null;
+  if (!story) {
+    if (fbR.status === 'rejected') threadEl.replaceChildren(errorBox("Couldn't load this thread", fbR.reason, () => { state.thread = null; showThread(id, focusId); }));
+    else threadEl.replaceChildren(errorBox('This item does not exist', new Error('It may have been deleted, or the link is wrong.')));
+    return;
+  }
+  if (story.type === 'comment') return resolveHn(id);
+  let kids = algR.status === 'fulfilled' ? algR.value : null;
+  if (!kids) { try { kids = await firebaseTree(story); } catch { kids = []; } if (tok !== state.navTok) return; }
+  if (story.kids) {
+    const pos = new Map(story.kids.map((k, i) => [k, i]));
+    kids.sort((a, b) => (pos.get(a.id) ?? 1e9) - (pos.get(b.id) ?? 1e9));
+  }
+  const total = countTree(kids);
+  const prevVisit = state.seen.get(id)?.visit || 0;
+  Object.assign(state.thread, { story, kids, total });
+  const wrap = h('div', { class: 'comments' });
+  for (const k of kids) wrap.append(commentEl(k, 0, story, prevVisit));
+  const aiBox = h('section', { class: 'ai', 'aria-label': 'Thread mood', 'aria-live': 'polite' });
+  const askBox = h('section', { class: 'ask', 'aria-label': 'Ask this thread', hidden: true });
+  let allFolded = false;
+  const foldAll = h('button', { class: 'btn-text', type: 'button', onclick: () => {
+    allFolded = !allFolded;
+    wrap.querySelectorAll(':scope > .cm').forEach(c => setFold(c, allFolded));
+    foldAll.textContent = allFolded ? 'Expand all' : 'Collapse all';
+  } }, 'Collapse all');
+  threadEl.replaceChildren(storyCard(story, total), aiBox, askBox,
+    h('div', { class: 'cm-bar' }, h('h2', { text: plural(total, 'comment') }), kids.length ? foldAll : null),
+    kids.length ? wrap : h('div', { class: 'empty', text: 'No comments yet.' }));
+  state.thread.ready = true;
+  threadHeader(story, total);
+  markVisit(story, total);
+  setupAnalysis(aiBox, story);
+  setupAsk(askBox, story);
+  if (focusId) focusComment(focusId);
+}
+function storyCard(story, total) {
+  const dom = domain(story.url);
+  const saveBtn = h('button', { class: 'pillbtn', type: 'button', 'data-save-story': story.id, onclick: () => toggleSaveStory(story) }, icon('bookmark'), 'Save');
+  const card = h('article', { class: 'story' },
+    story.url ? h('a', { class: 's-title', href: story.url, target: '_blank', rel: 'noopener noreferrer', onclick: () => markRead(story.id) }, story.title)
+              : h('h2', { class: 's-title', style: 'margin:0', text: story.title }),
+    dom && h('a', { class: 's-dom', href: story.url, target: '_blank', rel: 'noopener noreferrer' }, dom),
+    h('div', { class: 's-meta', text: `${story.type === 'job' ? 'job' : `${story.score ?? 0} points`} · ${story.by || 'unknown'} · ${ago(story.time)} · ${plural(total, 'comment')}` }),
+    story.text && h('div', { class: 's-text' }, sanitize(story.text)),
+    h('div', { class: 's-actions' },
+      story.url && h('a', { class: 'pillbtn', href: story.url, target: '_blank', rel: 'noopener noreferrer', onclick: () => markRead(story.id) }, icon('external'), 'Read article'),
+      saveBtn,
+      h('button', { class: 'pillbtn', type: 'button', onclick: () => share({ title: story.title, path: `item/${story.id}`, hnId: story.id }) }, icon('share'), 'Share')));
+  queueMicrotask(syncSaveButtons);
+  return card;
+}
+function descCount(n) { let c = 0; for (const k of n.kids) c += 1 + descCount(k); return c; }
+function setFold(el, fold) {
+  el.classList.toggle('collapsed', fold);
+  el.querySelector(':scope > .cm-head .cm-toggle')?.setAttribute('aria-expanded', String(!fold));
+}
+function commentEl(n, depth, story, prevVisit) {
+  const el = h('div', { class: 'cm', id: `c-${n.id}` });
+  el.style.setProperty('--dc', `var(--d${(depth % 6) + 1})`);
+  const isOp = n.by && n.by === story.by;
+  const replies = descCount(n);
+  const toggle = h('button', { class: 'cm-toggle', type: 'button', 'aria-expanded': 'true', onclick: () => setFold(el, !el.classList.contains('collapsed')) },
+    h('span', { class: 'cm-by', text: n.deleted ? '[deleted]' : n.by }),
+    isOp && h('span', { class: 'op', text: 'OP' }),
+    h('span', { class: 'cm-when', text: ago(n.time) }),
+    prevVisit > 0 && n.time > prevVisit && h('span', { class: 'new', text: 'new' }),
+    h('span', { class: 'cm-folded', text: replies ? `+${plural(replies, 'reply', 'replies')}` : 'collapsed' }));
+  const head = h('div', { class: 'cm-head' }, toggle, !n.deleted && iconBtn('more', 'Comment actions', () => commentMenu(n, story), 'cm-more'));
+  const body = h('div', { class: 'cm-body' });
+  if (n.deleted) body.append(h('p', { class: 'muted', style: 'margin:0', text: 'This comment was deleted.' }));
+  else body.append(sanitize(n.html));
+  el.append(head, body);
+  if (n.kids.length) {
+    const kids = h('div', { class: 'cm-kids' + (depth >= 7 ? ' flat' : '') });
+    for (const k of n.kids) kids.append(commentEl(k, depth + 1, story, prevVisit));
+    el.append(kids);
+  }
+  state.thread.nodes.set(n.id, { n, el });
+  return el;
+}
+function commentMenu(n, story) {
+  const saved = state.saved.has('c' + n.id);
+  const parentInThread = n.parent !== story.id && state.thread.nodes.has(n.parent);
+  openSheet(`${n.by} · ${ago(n.time)}`, [
+    { icon: 'share', label: 'Share comment', run: () => share({ title: `${n.by} on “${story.title}”`, path: `item/${story.id}/${n.id}`, hnId: n.id }) },
+    { icon: 'link', label: 'Copy Hacker News link', run: () => copy(hnUrl(n.id), 'Hacker News link copied') },
+    { icon: 'bookmark', label: saved ? 'Remove from saved' : 'Save comment', run: () => toggleSaveComment(n, story) },
+    parentInThread && { icon: 'up', label: 'Go to parent', run: () => focusComment(n.parent) },
+    { icon: 'fold', label: 'Collapse this thread', run: () => {
+      let top = n; while (top.parent !== story.id && state.thread.nodes.has(top.parent)) top = state.thread.nodes.get(top.parent).n;
+      const el = state.thread.nodes.get(top.id).el; setFold(el, true); el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    } },
+    { icon: 'external', label: 'Open on Hacker News', href: hnUrl(n.id) },
+  ]);
+}
+function focusComment(cid) {
+  const rec = state.thread?.nodes.get(cid);
+  if (!rec) { toast("That comment isn't in this thread yet"); return; }
+  let p = rec.n;
+  while (p) { const r = state.thread.nodes.get(p.id); if (r) setFold(r.el, false); p = state.thread.nodes.get(p.parent)?.n; }
+  requestAnimationFrame(() => {
+    rec.el.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    rec.el.classList.add('flash');
+    setTimeout(() => rec.el.classList.remove('flash'), 2400);
+  });
+}
+
+/* ---------- sentiment analysis ---------- */
+const SYSTEM_PROMPT = `You analyse the sentiment of Hacker News comment threads.
+Read the whole discussion and describe how the commenters, taken together, feel about the submission and its subject.
+Judge sentiment toward the submission and its subject, not the politeness of arguments between commenters.
+Be specific: name the actual points, objections and praise people raise. Do not invent comments.
+Reply with a single JSON object and nothing else, in exactly this shape:
+{
+  "verdict": "positive" | "mixed" | "negative" | "neutral",
+  "score": integer from -100 (overwhelmingly negative) to 100 (overwhelmingly positive),
+  "heat": "calm" | "lively" | "heated",
+  "headline": "one sentence under 20 words capturing the overall mood",
+  "summary": "two or three sentences on what people think and why",
+  "split": { "positive": integer percent, "neutral": integer percent, "negative": integer percent },
+  "themes": [ { "label": "short noun phrase", "sentiment": "positive" | "mixed" | "negative" | "neutral", "detail": "one sentence" } ],
+  "standouts": [ { "id": the numeric comment id from the transcript, "why": "one short sentence on why it is worth reading" } ]
+}
+Give 3 to 5 themes, most discussed first, and up to 3 standouts. The split percentages must add up to 100.`;
+function buildTranscript(story, kids, budget = 90000) {
+  const flat = [];
+  (function walk(list, depth) {
+    for (const n of list) {
+      if (!n.deleted && n.html) flat.push({ n, depth, i: flat.length });
+      walk(n.kids, depth + 1);
+    }
+  })(kids, 0);
+  for (const f of flat) {
+    let t = plain(f.n.html);
+    if (t.length > 1200) t = t.slice(0, 1200) + '…';
+    f.line = `${'  '.repeat(Math.min(f.depth, 8))}[${f.n.id}] ${f.n.by}${f.n.by === story.by ? ' (OP)' : ''}: ${t}`;
+  }
+  const byPriority = [...flat].sort((a, b) => a.depth - b.depth || a.i - b.i);
+  const pick = new Set(); let used = 0;
+  for (const f of byPriority) { if (used + f.line.length + 1 > budget) continue; used += f.line.length + 1; pick.add(f.i); }
+  return { text: flat.filter(f => pick.has(f.i)).map(f => f.line).join('\n'), analysed: pick.size, total: flat.length };
+}
+function userPrompt(story, tr) {
+  return [
+    `Submission: ${story.title}`,
+    story.url ? `Link: ${story.url}` : null,
+    `Posted by ${story.by}, ${story.score ?? 0} points.`,
+    story.text ? `Submission text: ${plain(story.text).slice(0, 3000)}` : null,
+    '',
+    `Comments: ${tr.analysed} of ${tr.total} shown${tr.analysed < tr.total ? ' (some deep replies were left out to fit)' : ''}. Each line is [id] author: text; indentation shows reply depth and (OP) marks the submitter.`,
+    '',
+    tr.text,
+  ].filter(x => x != null).join('\n');
+}
+async function postJSON(url, headers, body, signal, pname) {
+  let r;
+  try {
+    r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal, credentials: 'omit', referrerPolicy: 'no-referrer' });
+  } catch (e) {
+    if (e.name === 'AbortError') throw e;
+    throw new Error(`Couldn't reach ${pname}. Check your connection; a browser extension or network filter may be blocking the request.`);
+  }
+  const j = await r.json().catch(() => null);
+  if (!r.ok) {
+    const m = String(j?.error?.message || j?.message || `HTTP ${r.status}`).replace(/\.\s*$/, '');
+    const keyish = r.status === 401 || r.status === 403 || (r.status === 400 && /api key|apikey|credential/i.test(m));
+    const hint = keyish ? ` Check your ${pname} key in Settings.`
+      : r.status === 404 ? ' Check the model name in Settings.'
+      : r.status === 429 ? ' You may have hit a rate limit or run out of credit.' : '';
+    throw new Error(`${pname} returned an error: ${m}.${hint}`);
+  }
+  return j;
+}
+/* One call path for all providers. Returns text plus the token usage each provider reports. */
+async function callLLM(pid, key, model, { system, cacheText, messages, maxTokens = 2000, json = false }, signal) {
+  const pname = PROVIDERS[pid].name;
+  if (pid === 'claude') {
+    const sys = cacheText ? [{ type: 'text', text: system }, { type: 'text', text: cacheText, cache_control: { type: 'ephemeral' } }] : system;
+    const j = await postJSON('https://api.anthropic.com/v1/messages', {
+      'x-api-key': key, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true',
+    }, { model, max_tokens: maxTokens, system: sys, messages }, signal, pname);
+    const u = j.usage || {};
+    return { text: (j.content || []).map(c => c.text || '').join(''),
+      usage: { input: u.input_tokens || 0, output: u.output_tokens || 0, cacheRead: u.cache_read_input_tokens || 0, cacheWrite: u.cache_creation_input_tokens || 0 } };
+  }
+  const fullSystem = cacheText ? `${system}\n\n${cacheText}` : system;
+  if (pid === 'openai') {
+    const j = await postJSON('https://api.openai.com/v1/chat/completions', { authorization: `Bearer ${key}` }, {
+      model, max_completion_tokens: Math.max(4000, maxTokens * 3),
+      ...(json ? { response_format: { type: 'json_object' } } : {}),
+      messages: [{ role: 'system', content: fullSystem }, ...messages],
+    }, signal, pname);
+    const u = j.usage || {};
+    return { text: j.choices?.[0]?.message?.content || '', usage: { input: u.prompt_tokens || 0, output: u.completion_tokens || 0 } };
+  }
+  const j = await postJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { 'x-goog-api-key': key }, {
+    systemInstruction: { parts: [{ text: fullSystem }] },
+    contents: messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+    generationConfig: { ...(json ? { responseMimeType: 'application/json' } : {}), maxOutputTokens: 8192 },
+  }, signal, pname);
+  const u = j.usageMetadata || {};
+  return { text: (j.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join(''),
+    usage: { input: u.promptTokenCount || 0, output: (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0) } };
+}
+
+/* ---------- prices, estimates and the spend ledger ---------- */
+// Default USD prices per million tokens [input, output]. Editable in Settings; treat as estimates.
+const PRICES = {
+  'claude-sonnet-5-5': [2, 10], 'claude-opus-5-5': [4, 20], 'claude-haiku-5-5': [1, 5],
+  'gpt-5.6-luna': [1, 6], 'gpt-5.4-nano': [0.2, 1.25], 'gpt-5.6-sol': [5, 30],
+  'gemini-3.6-flash': [1.5, 7.5], 'gemini-3.1-pro-preview': [2, 12],
+};
+const CHEAP = { claude: 'claude-haiku-5-5', openai: 'gpt-5.4-nano', gemini: 'gemini-3.6-flash' };
+const mainModel = pid => (prefs.models[pid] || '').trim() || PROVIDERS[pid].model;
+const prereadModel = pid => (prefs.prereadModels[pid] || '').trim() || CHEAP[pid];
+function priceFor(model) {
+  const p = prefs.prices[model] || PRICES[model];
+  return p && Number.isFinite(p[0]) && Number.isFinite(p[1]) && p[0] >= 0 && p[1] >= 0 ? p : null;
+}
+function costOf(model, u) {
+  const p = priceFor(model);
+  if (!p || !u) return null;
+  return ((u.input || 0) * p[0] + (u.cacheWrite || 0) * p[0] * 1.25 + (u.cacheRead || 0) * p[0] * 0.1 + (u.output || 0) * p[1]) / 1e6;
+}
+const OUT_EST = { analysis: 900, ask: 500 };
+function estimate(model, chars, kind = 'analysis') {
+  const input = Math.ceil(chars / 3.6), output = OUT_EST[kind];
+  return { tokens: input + output, cost: costOf(model, { input, output }) };
+}
+function money(n) {
+  if (n == null || !isFinite(n)) return '';
+  if (n === 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
+}
+const fmtTok = n => n >= 1000 ? Math.round(n / 1000) + 'k' : String(n);
+function dayKeys() {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  const month = `${d.getFullYear()}-${p(d.getMonth() + 1)}`;
+  return { month, day: `${month}-${p(d.getDate())}` };
+}
+function rollLedger(l) {
+  const k = dayKeys();
+  l = Object.assign({ month: k.month, total: 0, calls: 0, unpriced: 0, day: k.day, dayTotal: 0, dayPreread: 0 }, l || {});
+  if (l.month !== k.month) Object.assign(l, { month: k.month, total: 0, calls: 0, unpriced: 0 });
+  if (l.day !== k.day) Object.assign(l, { day: k.day, dayTotal: 0, dayPreread: 0 });
+  return l;
+}
+async function ledger() {
+  if (!state.ledger) state.ledger = await S.get('kv', 'ledger').catch(() => null);
+  state.ledger = rollLedger(state.ledger);
+  return state.ledger;
+}
+async function recordSpend(cost, kind) {
+  const l = await ledger();
+  l.calls++;
+  if (cost == null) l.unpriced++;
+  else { l.total += cost; l.dayTotal += cost; if (kind === 'preread') l.dayPreread += cost; }
+  await S.put('kv', 'ledger', l).catch(() => {});
+}
+const hasCap = () => typeof prefs.monthlyCap === 'number' && isFinite(prefs.monthlyCap);
+const overMonthly = (l, add) => hasCap() && l.total + (add || 0) > prefs.monthlyCap;
+const threadTranscript = () => (state.thread.tr ||= buildTranscript(state.thread.story, state.thread.kids));
+const analysisChars = (story, tr) => SYSTEM_PROMPT.length + userPrompt(story, tr).length;
+
+function parseResult(raw) {
+  const s = raw.indexOf('{'), e = raw.lastIndexOf('}');
+  if (s < 0 || e < s) throw new Error("The model didn't return a readable result. Try again, or pick a different model.");
+  let o;
+  try { o = JSON.parse(raw.slice(s, e + 1)); } catch { throw new Error("The model's reply wasn't valid JSON. Try again, or pick a different model."); }
+  const V = ['positive', 'mixed', 'negative', 'neutral'];
+  const sp = o.split || {};
+  let p = Math.max(0, +sp.positive || 0), n = Math.max(0, +sp.neutral || 0), g = Math.max(0, +sp.negative || 0);
+  const tot = p + n + g;
+  if (tot) { p = Math.round(p / tot * 100); g = Math.round(g / tot * 100); n = 100 - p - g; } else { n = 100; }
+  return {
+    verdict: V.includes(o.verdict) ? o.verdict : 'mixed',
+    score: clamp(Math.round(+o.score || 0), -100, 100),
+    heat: ['calm', 'lively', 'heated'].includes(o.heat) ? o.heat : null,
+    headline: String(o.headline || '').slice(0, 240),
+    summary: String(o.summary || '').slice(0, 1400),
+    split: { positive: p, neutral: n, negative: g },
+    themes: (Array.isArray(o.themes) ? o.themes : []).slice(0, 6).map(t => ({
+      label: String(t?.label || '').slice(0, 90), sentiment: V.includes(t?.sentiment) ? t.sentiment : 'neutral', detail: String(t?.detail || '').slice(0, 320),
+    })).filter(t => t.label),
+    standouts: (Array.isArray(o.standouts) ? o.standouts : []).slice(0, 3).map(x => ({
+      id: +String(x?.id ?? '').replace(/\D/g, ''), why: String(x?.why || '').slice(0, 220),
+    })).filter(x => x.id),
+  };
+}
+/* Core analysis call, shared by thread view and pre-read. Registers itself as in-flight so a thread
+   opened mid-pre-read shows the same request instead of paying for a second one. */
+function analyzeStory(story, tr, pid, model, kind) {
+  const ctl = new AbortController();
+  const meta = { pid, model, n: tr.analysed, ctl, kind };
+  const p = (async () => {
+    const key = await readSecret(pid);
+    if (!key) throw new Error(`Your ${PROVIDERS[pid].name} key couldn't be read. Save it again in Settings.`);
+    const { text, usage } = await callLLM(pid, key, model, {
+      system: SYSTEM_PROMPT, messages: [{ role: 'user', content: userPrompt(story, tr) }], json: true, maxTokens: 2000,
+    }, ctl.signal);
+    const cost = costOf(model, usage);
+    await recordSpend(cost, kind);
+    const result = parseResult(text);
+    const rec = { id: story.id, result, provider: pid, model, at: Date.now(), analysed: tr.analysed, total: tr.total, usage, cost, kind };
+    await S.put('analysis', story.id, rec).catch(() => {});
+    setMood(story.id, rec);
+    return rec;
+  })();
+  state.inflight.set(story.id, { p, meta });
+  rowsChip(story.id);
+  p.finally(() => { state.inflight.delete(story.id); rowsChip(story.id); }).catch(() => {});
+  return { p, meta };
+}
+async function setupAnalysis(box, story) {
+  const [saved, cached] = await Promise.all([savedProviders(), S.get('analysis', story.id).catch(() => null)]);
+  if (!box.isConnected) return;
+  const inflight = state.inflight.get(story.id);
+  if (inflight) {
+    renderLoading(box, inflight.meta);
+    inflight.p.then(rec => { if (box.isConnected) renderResult(box, rec, story); }, err => { if (box.isConnected) renderError(box, story, err); });
+    return;
+  }
+  if (cached) return renderResult(box, cached, story);
+  if (!state.thread.total) { box.className = 'ai compact'; box.dataset.state = 'empty'; box.replaceChildren('No comments yet, so there is no mood to read.'); return; }
+  if (!saved.length) return renderNoKey(box);
+  const pid = activeProvider(saved);
+  if (!pid) return renderPick(box, story, saved);
+  if (!prefs.autorun) return renderManual(box, story, pid);
+  const est = estimate(mainModel(pid), analysisChars(story, threadTranscript()));
+  if (overMonthly(await ledger(), est.cost)) return renderManual(box, story, pid, true);
+  runAnalysis(box, story, pid);
+}
+function aiHead(extra) {
+  return h('div', { class: 'ai-top' }, h('span', { class: 'ai-label' }, icon('spark'), 'Thread mood'), extra);
+}
+function renderNoKey(box) {
+  box.className = 'ai'; box.dataset.state = 'prompt';
+  box.replaceChildren(aiHead(), h('div', { class: 'ai-prompt' },
+    h('h3', { text: 'See how a thread feels before you read it' }),
+    h('p', { text: 'Add a Claude, OpenAI or Gemini API key and every discussion opens with the overall mood, the themes people keep returning to, and the comments worth reading first.' }),
+    h('div', { class: 'btns' }, h('button', { class: 'btn', type: 'button', onclick: openSettings }, icon('tune'), 'Add an API key'))));
+}
+function renderPick(box, story, saved) {
+  box.className = 'ai'; box.dataset.state = 'prompt';
+  box.replaceChildren(aiHead(), h('div', { class: 'ai-prompt' },
+    h('h3', { text: 'Choose which provider reads your threads' }),
+    h('p', { text: `You've saved keys for ${saved.map(p => PROVIDERS[p].name).join(' and ')}. Pick one; you can switch any time in Settings.` }),
+    h('div', { class: 'btns' }, saved.map(p => h('button', { class: 'btn ghost', type: 'button', onclick: () => {
+      prefs.provider = p; savePrefs(); runAnalysis(box, story, p);
+      const ask = $('.ask', threadEl); if (ask) setupAsk(ask, story);
+    } }, `Use ${PROVIDERS[p].name}`)))));
+}
+function estimateLine(pid, est) {
+  const model = mainModel(pid);
+  return est.cost == null
+    ? `About ${fmtTok(est.tokens)} tokens with ${model}. Add its prices in Settings to see a cost.`
+    : `About ${fmtTok(est.tokens)} tokens with ${model}, roughly ${money(est.cost)}.`;
+}
+async function renderManual(box, story, pid, capped) {
+  box.className = 'ai'; box.dataset.state = 'prompt';
+  const est = estimate(mainModel(pid), analysisChars(story, threadTranscript()));
+  const l = await ledger();
+  if (!box.isConnected) return;
+  fill(box, aiHead(), h('div', { class: 'ai-prompt' },
+    capped && h('div', { class: 'notice', text: `You've spent ${money(l.total)} of your ${money(prefs.monthlyCap)} monthly limit, so threads no longer analyze automatically. You can still run one yourself.` }),
+    h('p', { text: `Read the mood of ${plural(state.thread.total, 'comment')} with ${PROVIDERS[pid].name}. ${estimateLine(pid, est)} The result is kept for this thread.` }),
+    h('div', { class: 'btns' }, h('button', { class: 'btn', type: 'button', onclick: () => runAnalysis(box, story, pid) }, icon('spark'), capped ? 'Analyze anyway' : 'Analyze thread'))));
+}
+function renderLoading(box, meta) {
+  box.className = 'ai'; box.dataset.state = 'loading';
+  box.replaceChildren(aiHead(h('button', { class: 'btn-text', type: 'button', onclick: () => meta.ctl.abort() }, 'Cancel')),
+    h('div', { class: 'ai-load' },
+      h('p', { text: `Reading ${plural(meta.n, 'comment')} with ${PROVIDERS[meta.pid].name} (${meta.model})…` }),
+      h('span', { class: 'bone', style: 'width:100%;height:10px' }),
+      h('span', { class: 'bone', style: 'width:88%' }), h('span', { class: 'bone', style: 'width:72%' }), h('span', { class: 'bone', style: 'width:80%' })));
+}
+function renderError(box, story, err) {
+  box.className = 'ai'; box.dataset.state = 'error';
+  const cancelled = err?.name === 'AbortError';
+  box.replaceChildren(aiHead(), h('div', { class: 'ai-prompt' },
+    h('p', { class: cancelled ? null : 'ai-err', text: cancelled ? 'Analysis cancelled.' : err.message }),
+    h('div', { class: 'btns' },
+      h('button', { class: 'btn', type: 'button', onclick: () => reanalyze(box, story) }, icon('refresh'), cancelled ? 'Analyze thread' : 'Try again'),
+      !cancelled && h('button', { class: 'btn ghost', type: 'button', onclick: openSettings }, 'Settings'))));
+}
+async function reanalyze(box, story) {
+  const saved = await savedProviders();
+  if (!saved.length) return renderNoKey(box);
+  const pid = activeProvider(saved);
+  if (!pid) return renderPick(box, story, saved);
+  runAnalysis(box, story, pid);
+}
+async function runAnalysis(box, story, pid) {
+  const th = state.thread;
+  if (!th || th.id !== story.id || !th.ready) return;
+  if (state.inflight.has(story.id)) return setupAnalysis(box, story);
+  const { p, meta } = analyzeStory(story, threadTranscript(), pid, mainModel(pid), prefs.autorun ? 'auto' : 'manual');
+  renderLoading(box, meta);
+  try { const rec = await p; if (box.isConnected) renderResult(box, rec, story); }
+  catch (e) { if (box.isConnected) renderError(box, story, e); }
+}
+function renderResult(box, rec, story) {
+  const r = rec.result;
+  box.className = 'ai'; box.dataset.state = 'done';
+  const split = h('div', { class: 'split', role: 'img', 'aria-label': `${r.split.positive}% positive, ${r.split.neutral}% neutral, ${r.split.negative}% negative` });
+  [['p', r.split.positive], ['n', r.split.neutral], ['g', r.split.negative]].forEach(([c, v]) => {
+    if (!v) return; const i = h('i', { class: c }); i.style.flex = `${v} 1 0`; split.append(i);
+  });
+  const reads = r.standouts.map(s => ({ s, node: state.thread?.nodes.get(s.id)?.n })).filter(x => x.node);
+  const nowTotal = state.thread?.id === story.id ? state.thread.total : rec.total;
+  const fresh = nowTotal - rec.total;
+  fill(box,
+    aiHead([
+      h('span', { class: `pill v-${r.verdict}`, text: cap(r.verdict) }),
+      r.heat && h('span', { class: `pill heat-${r.heat}`, text: cap(r.heat) }),
+      h('span', { class: 'ai-score', title: 'Sentiment score, from −100 to +100', text: (r.score > 0 ? '+' : '') + r.score }),
+    ]),
+    r.headline && h('p', { class: 'ai-headline', text: r.headline }),
+    split,
+    h('div', { class: 'legend' },
+      h('span', null, h('i', { class: 'dot s-positive' }), `${r.split.positive}% positive`),
+      h('span', null, h('i', { class: 'dot s-neutral' }), `${r.split.neutral}% neutral`),
+      h('span', null, h('i', { class: 'dot s-negative' }), `${r.split.negative}% negative`)),
+    r.summary && h('p', { class: 'ai-summary', text: r.summary }),
+    r.themes.length > 0 && [h('h4', { text: 'What people keep coming back to' }),
+      h('ul', { class: 'themes' }, r.themes.map(t => h('li', null, h('i', { class: `dot s-${t.sentiment}`, title: t.sentiment }), h('div', null, h('b', { text: t.label }), t.detail && h('span', { text: ' ' + t.detail })))))],
+    reads.length > 0 && [h('h4', { text: 'Read these first' }),
+      h('div', { class: 'reads' }, reads.map(({ s, node }) => h('a', { class: 'read-link', href: `#/item/${story.id}/${s.id}` }, h('b', { text: node.by }), h('span', { text: s.why }))))],
+    fresh >= Math.max(10, rec.total * 0.2) && h('div', { class: 'ai-new' }, `${plural(fresh, 'new comment')} since this read.`,
+      h('button', { class: 'btn-text', type: 'button', onclick: () => reanalyze(box, story) }, 'Update')),
+    h('div', { class: 'ai-foot' },
+      h('span', { text: [PROVIDERS[rec.provider]?.name || rec.provider, rec.model, rec.kind === 'preread' ? 'pre-read' : null,
+        `${rec.analysed} of ${plural(rec.total, 'comment')}`, rec.cost != null ? money(rec.cost) : null, agoWords(rec.at)].filter(Boolean).join(' · ') }),
+      h('button', { class: 'btn-text', type: 'button', onclick: () => reanalyze(box, story) }, rec.kind === 'preread' ? 'Re-analyze in full' : 'Re-analyze')));
+}
+
+/* ---------- moods on the feed ---------- */
+function setMood(id, rec) {
+  const r = rec.result;
+  state.moods.set(id, { verdict: r.verdict, score: r.score, heat: r.heat, kind: rec.kind });
+  listEl.querySelectorAll(`.row[data-id="${id}"]`).forEach(row => {
+    row.dataset.mood = r.verdict; row.dataset.heat = r.heat || '';
+    const meta = row.querySelector('.r-meta');
+    meta.querySelector('.r-mood')?.remove();
+    meta.append(moodChip(id));
+  });
+  if (state.view === 'list' && state.listKey?.startsWith('feed:') && !$('.moodbar', listEl)) listEl.prepend(moodBar());
+  applyMoodFilter();
+}
+function rowsChip(id) {
+  listEl.querySelectorAll(`.row[data-id="${id}"] .r-meta`).forEach(meta => {
+    meta.querySelector('.r-mood')?.remove();
+    const c = moodChip(id); if (c) meta.append(c);
+  });
+}
+function moodChip(id) {
+  if (state.inflight.has(id)) return h('span', { class: 'r-mood pending', title: 'Reading the comments' }, h('i', { class: 'dot' }), 'Reading…');
+  const m = state.moods.get(id);
+  if (!m) return null;
+  const score = (m.score > 0 ? '+' : '') + m.score;
+  return h('span', { class: `r-mood v-${m.verdict}`, title: `${cap(m.verdict)} mood, score ${score}${m.heat ? ', ' + m.heat : ''}` },
+    h('i', { class: 'dot' }), h('span', { class: 'vh', text: `Mood ${m.verdict}, ` }), score, m.heat === 'heated' ? ' · heated' : '');
+}
+const MOOD_FILTERS = [[null, 'All'], ['positive', 'Positive'], ['mixed', 'Mixed'], ['negative', 'Negative'], ['neutral', 'Neutral']];
+function moodBar() {
+  const bar = h('div', { class: 'moodbar', role: 'group', 'aria-label': 'Filter by thread mood' },
+    MOOD_FILTERS.map(([v, label]) => h('button', { class: 'chip', type: 'button', 'data-mf': v || 'all', onclick: () => { state.moodFilter.verdict = v; applyMoodFilter(); } },
+      v && h('i', { class: `dot s-${v}` }), label)),
+    h('button', { class: 'chip', type: 'button', 'data-mf': 'heat', onclick: () => { state.moodFilter.hideHeated = !state.moodFilter.hideHeated; applyMoodFilter(); } }, 'Hide heated'));
+  return h('div', { class: 'moodwrap' }, bar, h('div', { class: 'moodnote', 'aria-live': 'polite' }));
+}
+function moodFilterOn() { return !!(state.moodFilter.verdict || state.moodFilter.hideHeated); }
+function applyMoodFilter() {
+  const f = state.moodFilter;
+  const wrap = $('.moodwrap', listEl);
+  wrap?.querySelectorAll('[data-mf]').forEach(c => {
+    const k = c.dataset.mf;
+    const on = k === 'heat' ? f.hideHeated : (k === 'all' ? !f.verdict : f.verdict === k);
+    c.classList.toggle('on', on); c.setAttribute('aria-pressed', String(on));
+  });
+  let shown = 0, total = 0, pending = 0;
+  listEl.querySelectorAll('.row[data-id]').forEach(r => {
+    total++;
+    const v = r.dataset.mood;
+    if (!v) pending++;
+    const hide = (f.verdict && v !== f.verdict) || (f.hideHeated && r.dataset.heat === 'heated');
+    r.hidden = !!hide;
+    if (!hide) shown++;
+  });
+  const note = wrap?.querySelector('.moodnote');
+  if (note) note.textContent = moodFilterOn()
+    ? `Showing ${shown} of ${total} loaded stories${pending ? ` · ${pending} not analyzed yet` : ''}`
+    : (pending < total ? `${total - pending} of ${total} loaded stories have a mood` : '');
+}
+
+/* ---------- analyze one story from its menu ---------- */
+async function analyzeFromList(it) {
+  if (state.inflight.has(it.id)) { toast('Already reading this thread'); return; }
+  const saved = await savedProviders();
+  if (!saved.length) { toast('Add an API key to read thread moods'); openSettings(); return; }
+  const pid = activeProvider(saved);
+  if (!pid) {
+    openSheet('Which provider should read this thread?', saved.map(p => ({ icon: 'spark', label: `Use ${PROVIDERS[p].name}`,
+      run: () => { prefs.provider = p; savePrefs(); analyzeFromList(it); } })));
+    return;
+  }
+  // Show progress straight away; the comment fetch can take a second on big threads.
+  const hold = { p: new Promise(() => {}), meta: { pid, model: mainModel(pid), n: it.descendants || 0, ctl: new AbortController(), kind: 'manual' } };
+  state.inflight.set(it.id, hold); rowsChip(it.id);
+  let kids = null, fetchErr = null;
+  try {
+    try { kids = await algoliaTree(it.id); }
+    catch { const full = await getItem(it.id, true); kids = full ? await firebaseTree(full) : []; }
+  } catch (e) { fetchErr = e; }
+  state.inflight.delete(it.id); rowsChip(it.id);
+  if (!kids) { toast(`Couldn't load the comments. ${fetchErr?.message || ''}`.trim()); return; }
+  const tr = buildTranscript(it, kids);
+  if (!tr.analysed) { toast('This thread has no comments to read yet'); return; }
+  try {
+    const rec = await analyzeStory(it, tr, pid, mainModel(pid), 'manual').p;
+    const r = rec.result;
+    toast(`Mood: ${cap(r.verdict)} ${(r.score > 0 ? '+' : '') + r.score}${rec.cost != null ? ' · ' + money(rec.cost) : ''}`);
+  } catch (e) {
+    if (e.name !== 'AbortError') toast(e.message);
+  }
+}
+
+/* ---------- pre-read: analyze the top of a feed in the background ---------- */
+let prereadRun = 0;
+function prereadStatus(msg) {
+  state.prereadMsg = msg;
+  const el = $('#hdSub');
+  if (el && state.view === 'list' && state.listKey?.startsWith('feed:')) el.textContent = msg || feedSub();
+}
+async function prereadFeed() {
+  const run = ++prereadRun;
+  if (!prefs.preread.on) return prereadStatus(null);
+  const pid = activeProvider(await savedProviders());
+  if (!pid) return prereadStatus(null);
+  const model = prereadModel(pid);
+  const todo = state.ids.slice(0, prefs.preread.count).filter(id => !state.moods.has(id));
+  let i = 0;
+  for (const id of todo) {
+    i++;
+    if (run !== prereadRun) return;
+    if (state.inflight.has(id) || state.moods.has(id)) continue;
+    const story = await getItem(id).catch(() => null);
+    if (!story || story.type !== 'story' || (story.descendants || 0) < 5) continue;
+    let kids;
+    try { kids = await algoliaTree(id); } catch { continue; }
+    if (run !== prereadRun) return;
+    if (state.inflight.has(id) || state.moods.has(id)) continue;
+    const tr = buildTranscript(story, kids);
+    if (!tr.analysed) continue;
+    const est = estimate(model, analysisChars(story, tr));
+    if (est.cost == null) return prereadStatus(`Pre-read paused: add prices for ${model} in Settings`);
+    const l = await ledger();
+    if (l.dayPreread + est.cost > prefs.preread.dailyCap) return prereadStatus(`Pre-read paused: today's ${money(prefs.preread.dailyCap)} budget is used`);
+    if (overMonthly(l, est.cost)) return prereadStatus('Pre-read paused: monthly limit reached');
+    prereadStatus(`Pre-reading ${i} of ${todo.length}…`);
+    try { await analyzeStory(story, tr, pid, model, 'preread').p; }
+    catch (e) {
+      if (run === prereadRun) prereadStatus(null);
+      if (e.name !== 'AbortError') toast(`Pre-read stopped. ${e.message}`);
+      return;
+    }
+  }
+  if (run === prereadRun) prereadStatus(null);
+}
+
+/* ---------- ask this thread ---------- */
+const ASK_SYSTEM = `You answer questions about one Hacker News discussion, using only the comments provided below.
+Cite the comments you draw on by putting their numeric id in square brackets, like [41234567]. Cite specific comments rather than the thread in general.
+If the comments don't answer the question, say so plainly instead of guessing.
+Keep answers short: two to five sentences, or a short list where each line starts with "- ". Use plain text, with no headings, bold or tables.`;
+const SUGGESTIONS = ['What are the main objections?', 'Did anyone with hands-on experience weigh in?', 'What alternatives do people suggest?'];
+async function setupAsk(section, story) {
+  const pid = activeProvider(await savedProviders());
+  if (!section.isConnected) return;
+  if (!pid || !state.thread?.total) { section.hidden = true; return; }
+  section.hidden = false;
+  const hist = (await S.get('kv', 'qa:' + story.id).catch(() => null)) || [];
+  if (section.isConnected) renderAsk(section, story, pid, hist);
+}
+function renderAnswer(text, story) {
+  const frag = document.createDocumentFragment();
+  const inline = (el, str) => {
+    str = str.replace(/\*\*(.+?)\*\*/g, '$1');
+    for (const part of str.split(/(\[\d{3,}(?:\s*,\s*\d{3,})*\])/)) {
+      const m = part.match(/^\[([\d,\s]+)\]$/);
+      if (!m) { if (part) el.append(part); continue; }
+      m[1].split(',').map(x => +x.trim()).forEach(id => {
+        const node = state.thread?.id === story.id ? state.thread.nodes.get(id)?.n : null;
+        el.append(node ? h('a', { class: 'cite', href: `#/item/${story.id}/${id}`, title: `Jump to ${node.by}'s comment` }, node.by) : `[${id}]`, ' ');
+      });
+    }
+  };
+  for (const block of text.trim().split(/\n\s*\n/)) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) continue;
+    if (lines.every(l => /^[-*•]\s+/.test(l))) {
+      const ul = h('ul');
+      lines.forEach(l => { const li = h('li'); inline(li, l.replace(/^[-*•]\s+/, '')); ul.append(li); });
+      frag.append(ul);
+    } else {
+      lines.forEach(l => { const p = h('p'); inline(p, l.replace(/^#+\s*/, '')); frag.append(p); });
+    }
+  }
+  return frag;
+}
+function renderAsk(section, story, pid, hist, pending) {
+  const model = mainModel(pid);
+  const input = h('input', { class: 'txt', id: 'askInput', type: 'text', maxlength: '500', placeholder: 'Ask about this thread', autocomplete: 'off', enterkeyhint: 'send', 'aria-label': 'Ask a question about this thread', disabled: !!pending });
+  const est = estimate(model, ASK_SYSTEM.length + userPrompt(story, threadTranscript()).length, 'ask');
+  const ask = async q => {
+    if (pending) return;
+    renderAsk(section, story, pid, hist, q);
+    try {
+      const a = await askThread(story, pid, hist, q);
+      hist = [...hist, a];
+      await S.put('kv', 'qa:' + story.id, hist).catch(() => {});
+      if (section.isConnected) renderAsk(section, story, pid, hist);
+    } catch (e) {
+      if (!section.isConnected) return;
+      renderAsk(section, story, pid, hist);
+      section.querySelector('.ask-form').before(h('p', { class: 'ai-err', role: 'alert', text: e.message }));
+      section.querySelector('#askInput').value = q;
+    }
+  };
+  fill(section,
+    h('div', { class: 'ask-hd' },
+      h('h3', null, icon('spark'), 'Ask this thread'),
+      hist.length > 0 && !pending && h('button', { class: 'btn-text', type: 'button', onclick: async () => {
+        await S.del('kv', 'qa:' + story.id).catch(() => {}); renderAsk(section, story, pid, []);
+      } }, 'Clear')),
+    hist.map(x => h('div', { class: 'qa' },
+      h('p', { class: 'q', text: x.q }),
+      h('div', { class: 'a' }, renderAnswer(x.a, story)),
+      h('div', { class: 'qa-foot', text: [PROVIDERS[x.provider]?.name, x.model, x.cost != null ? money(x.cost) : null, agoWords(x.at)].filter(Boolean).join(' · ') }))),
+    pending && h('div', { class: 'qa', 'aria-busy': 'true' }, h('p', { class: 'q', text: pending }),
+      h('div', { class: 'ai-load' }, h('span', { class: 'bone', style: 'width:92%' }), h('span', { class: 'bone', style: 'width:76%' }))),
+    !hist.length && !pending && h('div', { class: 'sugg' }, SUGGESTIONS.map(s => h('button', { class: 'chip', type: 'button', onclick: () => ask(s) }, s))),
+    h('form', { class: 'ask-form', onsubmit: e => { e.preventDefault(); const q = input.value.trim(); if (q) ask(q); } },
+      input, h('button', { class: 'btn', type: 'submit', disabled: !!pending }, pending ? 'Asking…' : 'Ask')),
+    h('p', { class: 'ask-note', text: `Answered by ${PROVIDERS[pid].name} (${model}) from this thread's comments only. ${est.cost != null ? `Roughly ${money(est.cost)} per question` : `About ${fmtTok(est.tokens)} tokens per question`}${pid === 'claude' ? ', less for follow-ups' : ''}.` }));
+}
+async function askThread(story, pid, hist, q) {
+  const model = mainModel(pid);
+  const key = await readSecret(pid);
+  if (!key) throw new Error(`Your ${PROVIDERS[pid].name} key couldn't be read. Save it again in Settings.`);
+  const cacheText = userPrompt(story, threadTranscript());
+  const messages = [];
+  for (const x of hist.slice(-5)) messages.push({ role: 'user', content: x.q }, { role: 'assistant', content: x.a });
+  messages.push({ role: 'user', content: q });
+  const { text, usage } = await callLLM(pid, key, model, { system: ASK_SYSTEM, cacheText, messages, maxTokens: 1200 });
+  const cost = costOf(model, usage);
+  await recordSpend(cost, 'ask');
+  if (!text.trim()) throw new Error(`${PROVIDERS[pid].name} returned an empty answer. Try again or rephrase.`);
+  return { q, a: text.trim(), at: Date.now(), provider: pid, model, cost };
+}
+
+/* ---------- settings ---------- */
+function armedButton(label, armedLabel, fn) {
+  const b = h('button', { class: 'btn ghost', type: 'button' }, label);
+  let armed = false, t;
+  b.addEventListener('click', async () => {
+    if (!armed) {
+      armed = true; b.textContent = armedLabel; b.classList.add('arm');
+      t = setTimeout(() => { armed = false; b.textContent = label; b.classList.remove('arm'); }, 4000);
+      return;
+    }
+    clearTimeout(t); b.disabled = true;
+    await fn();
+  });
+  return b;
+}
+async function eraseEverything() {
+  try { const d = await openDb(); d?.close(); } catch {}
+  await new Promise(res => { try { const r = indexedDB.deleteDatabase(DB_NAME); r.onsuccess = r.onerror = r.onblocked = () => res(); } catch { res(); } });
+  try { localStorage.removeItem(PREF_KEY); } catch {}
+  location.hash = '#/top';
+  location.reload();
+}
+function openSettings(focusId) {
+  if (typeof focusId !== 'string') focusId = null;
+  const panel = h('div', { class: 'panel', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'setTitle' });
+  const ov = openOverlay(panel);
+  ov.addEventListener('closed', () => {
+    applyTheme();
+    if (state.view === 'thread' && state.thread?.ready) {
+      const box = $('.ai', threadEl);
+      if (box && box.dataset.state !== 'done' && box.dataset.state !== 'loading') setupAnalysis(box, state.thread.story);
+      const ask = $('.ask', threadEl);
+      if (ask && !ask.querySelector('[aria-busy]')) setupAsk(ask, state.thread.story);
+    }
+    if (state.view === 'list' && state.listKey?.startsWith('feed:') && state.listReady) {
+      if ((state.moods.size || prefs.preread.on) && !$('.moodwrap', listEl)) { listEl.prepend(moodBar()); applyMoodFilter(); }
+      prereadFeed();
+    }
+  });
+  async function render() {
+    const saved = await savedProviders();
+    const recs = Object.fromEntries(await Promise.all(saved.map(async p => [p, await S.get('secrets', p)])));
+    const active = activeProvider(saved);
+    const analyses = await S.count('analysis').catch(() => 0);
+    const qaKeys = (await S.keys('kv').catch(() => [])).filter(k => typeof k === 'string' && k.startsWith('qa:'));
+    const l = await ledger();
+    const scrollTop = panel.scrollTop;
+    panel.replaceChildren(
+      h('div', { class: 'panel-hd' }, iconBtn('close', 'Close settings', () => ov.close()), h('h2', { id: 'setTitle', text: 'Settings' })),
+
+      h('section', { class: 'sec' },
+        h('h3', { text: 'Thread mood' }),
+        h('p', { text: 'Add a key for any of these providers. Each thread you open is sent, as plain text, straight from this browser to the provider you pick. Nothing passes through another server.' }),
+        !cryptoOK && h('div', { class: 'notice', text: 'This page isn’t running in a secure context (HTTPS or localhost), so it can’t encrypt keys. Open it over HTTPS to add one.' }),
+        memOnly && h('div', { class: 'notice', text: 'This browser is blocking storage for this page, so keys and saved items will be forgotten when you close it.' }),
+        saved.length > 1 && !active && h('div', { class: 'notice', role: 'alert', text: 'You have more than one key saved. Choose which one to use for analysis.' }),
+        Object.keys(PROVIDERS).map(pid => providerBlock(pid, recs[pid], saved, active)),
+        h('label', { class: 'toggle' },
+          h('input', { type: 'checkbox', id: 'autorun', checked: prefs.autorun, onchange: e => { prefs.autorun = e.target.checked; savePrefs(); } }),
+          h('span', null, 'Analyze threads as soon as they open', h('small', { text: 'Each new analysis is one paid API call. Results are kept per thread, so reopening a thread costs nothing. Turn this off to analyze on demand.' })))),
+
+      h('section', { class: 'sec', id: 'set-spend' },
+        h('h3', { text: 'Spending' }),
+        h('div', { class: 'spend' },
+          h('div', null, h('b', { text: money(l.total) }), h('small', { text: `this month · ${plural(l.calls, 'call')}` })),
+          h('div', null, h('b', { text: money(l.dayTotal) }), h('small', { text: 'today' })),
+          h('div', null, h('b', { text: money(l.dayPreread) }), h('small', { text: 'on pre-reads today' }))),
+        l.unpriced > 0 && h('div', { class: 'notice', text: `${plural(l.unpriced, 'call')} this month used a model with no price set, so ${l.unpriced === 1 ? 'it isn’t' : 'they aren’t'} included in the total.` }),
+        h('label', { class: 'field', for: 'monthlyCap' }, h('span', { text: 'Monthly limit for automatic analysis (USD)' }),
+          h('input', { class: 'txt', id: 'monthlyCap', type: 'number', inputmode: 'decimal', min: '0', step: '0.5', placeholder: 'No limit', value: hasCap() ? String(prefs.monthlyCap) : '', onchange: e => {
+            const v = e.target.value.trim(); prefs.monthlyCap = v === '' ? null : Math.max(0, +v || 0); savePrefs();
+          } })),
+        h('p', { text: 'Once this month’s total reaches the limit, threads and pre-reads wait for you to tap Analyze. Questions you ask always go through. Totals are estimates built from the token counts each provider reports and the prices set for each model above; your provider’s billing page has the exact figure.' }),
+        h('div', { class: 'drow' }, h('div', null, h('b', { text: 'Reset this month’s total' }), h('small', { text: 'Use this if it has drifted from your provider’s bill.' })),
+          armedButton('Reset', 'Tap again to reset', async () => { state.ledger = rollLedger({}); await S.put('kv', 'ledger', state.ledger).catch(() => {}); toast('Spending total reset'); render(); }))),
+
+      h('section', { class: 'sec', id: 'set-preread' },
+        h('h3', { text: 'Pre-read the front page' }),
+        h('label', { class: 'toggle' },
+          h('input', { type: 'checkbox', id: 'preread', checked: prefs.preread.on, onchange: e => { prefs.preread.on = e.target.checked; savePrefs(); render(); } }),
+          h('span', null, 'Pre-read top stories when a feed loads', h('small', { text: 'A cheaper model reads the top threads in the background, so each story shows its mood in the list before you open it. Threads with fewer than 5 comments are skipped, and each thread is only read once.' }))),
+        prefs.preread.on && [
+          !active && h('div', { class: 'notice', text: 'Add a key, or choose which provider to use, before pre-reading can start.' }),
+          h('div', { class: 'field' }, h('span', { text: 'How many stories' }),
+            h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Stories to pre-read' }, [5, 10, 20, 30].map(n => h('label', null,
+              h('input', { type: 'radio', name: 'prcount', id: 'prcount-' + n, checked: prefs.preread.count === n, onchange: () => { prefs.preread.count = n; savePrefs(); } }),
+              h('span', { text: String(n) }))))),
+          h('label', { class: 'field', for: 'prCap' }, h('span', { text: 'Daily pre-read budget (USD)' }),
+            h('input', { class: 'txt', id: 'prCap', type: 'number', inputmode: 'decimal', min: '0', step: '0.1', value: String(prefs.preread.dailyCap), onchange: e => { prefs.preread.dailyCap = Math.max(0, +e.target.value || 0); savePrefs(); } })),
+          active && [
+            h('label', { class: 'field', for: 'prModel' }, h('span', { text: `Pre-read model for ${PROVIDERS[active].name}` }),
+              h('input', { class: 'txt', id: 'prModel', list: 'prModel-list', value: prereadModel(active), autocomplete: 'off', spellcheck: 'false', onchange: e => {
+                const v = e.target.value.trim(); if (v && v !== CHEAP[active]) prefs.prereadModels[active] = v; else delete prefs.prereadModels[active]; savePrefs(); render();
+              } }),
+              h('datalist', { id: 'prModel-list' }, PROVIDERS[active].models.map(m => h('option', { value: m })))),
+            priceFields(prereadModel(active), 'prprice'),
+            (() => {
+              const est = estimate(prereadModel(active), 60000);
+              return h('p', { text: est.cost != null && est.cost > 0
+                ? `A busy thread costs roughly ${money(est.cost)} to pre-read with this model, so ${money(prefs.preread.dailyCap)} a day covers about ${plural(Math.floor(prefs.preread.dailyCap / est.cost), 'thread')}.`
+                : 'Set prices for this model so the daily budget can be enforced. Pre-reading stays paused until then.' });
+            })()],
+        ]),
+
+      h('section', { class: 'sec' },
+        h('h3', { text: 'Appearance' }),
+        h('div', { class: 'seg', role: 'radiogroup', 'aria-label': 'Theme' },
+          [['system', 'System'], ['light', 'Light'], ['bright', 'Bright'], ['dark', 'Dark']].map(([v, l]) => h('label', null,
+            h('input', { type: 'radio', name: 'theme', id: 'theme-' + v, value: v, checked: prefs.theme === v, onchange: () => { prefs.theme = v; savePrefs(); applyTheme(); } }),
+            h('span', { text: l })))),
+        textSizeControl()),
+
+      h('section', { class: 'sec', id: 'set-install' },
+        h('h3', { text: 'Install as an app' }),
+        installBlock(render),
+        h('p', { text: 'The installed app still needs a connection to load stories.' })),
+
+      h('section', { class: 'sec' },
+        h('h3', { text: 'Your data' }),
+        h('p', { text: 'Everything below lives only in this browser. Clearing it here removes it for good.' }),
+        dataRow('Saved stories and comments', plural(state.saved.size, 'item'), 'Clear saved', async () => { await S.clear('saved'); state.saved.clear(); syncSaveButtons(); toast('Saved items cleared'); render(); }),
+        dataRow('Reading history', `${plural(state.seen.size, 'story', 'stories')} marked read`, 'Clear history', async () => { await S.clear('seen'); state.seen.clear(); refreshRows(); toast('Reading history cleared'); render(); }),
+        dataRow('Cached analyses and answers', `${plural(analyses, 'thread')} analyzed${qaKeys.length ? ` · questions asked in ${plural(qaKeys.length, 'thread')}` : ''}`, 'Clear cache', async () => {
+          await S.clear('analysis');
+          for (const k of qaKeys) await S.del('kv', k).catch(() => {});
+          state.moods.clear();
+          listEl.querySelectorAll('.r-mood').forEach(e => e.remove());
+          listEl.querySelectorAll('.row').forEach(r => { delete r.dataset.mood; delete r.dataset.heat; });
+          applyMoodFilter();
+          toast('Analyses and answers cleared'); render();
+        }),
+        dataRow('API keys', saved.length ? saved.map(p => PROVIDERS[p].name).join(', ') : 'None saved', 'Clear all keys', async () => { await S.clear('secrets'); prefs.provider = null; savePrefs(); toast('All API keys removed'); render(); }, !saved.length),
+        dataRow('Everything', 'Keys, saved items, history, cache and preferences', 'Erase all data', eraseEverything)),
+
+      h('section', { class: 'sec' },
+        h('h3', { text: 'How your keys are protected' }),
+        h('p', { text: 'Keys are encrypted with AES-256-GCM using a key this browser generates and cannot export, then stored in this site’s IndexedDB. A key is decrypted only at the moment a request goes to its provider. The page loads no third-party scripts, and its content security policy blocks connections to anything except Hacker News and the three AI providers.' }),
+        h('p', { text: 'Anyone using this browser profile can still run analyses with a saved key, so clear your keys on shared devices. Set a spending limit with your provider as well.' })));
+    panel.scrollTop = scrollTop;
+  }
+  function priceFields(model, idp) {
+    const p = priceFor(model);
+    const mk = (i, label) => h('label', { class: 'field', for: `${idp}-${i}` }, h('span', { text: label }),
+      h('input', { class: 'txt', id: `${idp}-${i}`, type: 'number', inputmode: 'decimal', min: '0', step: '0.01', placeholder: 'Not set', value: p ? String(p[i]) : '', onchange: e => {
+        const cur = (prefs.prices[model] || PRICES[model] || [null, null]).slice();
+        const v = e.target.value.trim();
+        cur[i] = v === '' ? null : Math.max(0, +v);
+        const def = PRICES[model];
+        if (def && cur[0] === def[0] && cur[1] === def[1]) delete prefs.prices[model]; else prefs.prices[model] = cur;
+        savePrefs();
+      } }));
+    return h('div', { class: 'field' }, h('span', { text: `${model} price, USD per million tokens` }),
+      h('div', { class: 'price-row' }, mk(0, 'Input'), mk(1, 'Output')));
+  }
+  function dataRow(title, detail, btnLabel, fn, disabled) {
+    const b = armedButton(btnLabel, 'Tap again to confirm', fn);
+    if (disabled) b.disabled = true;
+    return h('div', { class: 'drow' }, h('div', null, h('b', { text: title }), h('small', { text: detail })), b);
+  }
+  function providerBlock(pid, rec, saved, active) {
+    const P = PROVIDERS[pid];
+    const isActive = active === pid;
+    const keyInput = h('input', { class: 'txt', id: `key-${pid}`, type: 'password', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: rec ? 'Paste a new key to replace it' : P.placeholder, 'aria-label': `${P.name} API key` });
+    const save = async () => {
+      const v = keyInput.value.trim();
+      if (!v) { keyInput.focus(); toast('Paste a key first'); return; }
+      if (/\s/.test(v)) { toast('That key contains spaces. Check you copied it whole.'); return; }
+      try {
+        await saveSecret(pid, v);
+        keyInput.value = '';
+        const now = await savedProviders();
+        toast(now.length > 1 && !activeProvider(now) ? `${P.name} key saved. Now choose which provider to use.` : `${P.name} key saved`);
+        render();
+      } catch (e) { toast('Could not save the key: ' + (e.message || e)); }
+    };
+    keyInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+    const modelId = `model-${pid}`;
+    return h('div', { class: 'prov' + (isActive && saved.length > 1 ? ' active' : '') },
+      h('div', { class: 'prov-head' },
+        h('div', { class: 'prov-name' }, P.name, h('small', { text: P.vendor })),
+        rec && saved.length > 1 ? h('label', { class: 'use' }, h('input', { type: 'radio', name: 'provider', id: `use-${pid}`, checked: isActive, onchange: () => { prefs.provider = pid; savePrefs(); render(); } }), 'Use for analysis')
+          : rec ? h('span', { class: 'badge', text: 'In use' }) : null),
+      rec && h('div', { class: 'status' }, h('span', { text: `Saved, ends in ${rec.hint} · ${new Date(rec.saved).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })}` }),
+        armedButton('Clear key', 'Tap again to clear', async () => {
+          await S.del('secrets', pid);
+          if (prefs.provider === pid) { prefs.provider = null; savePrefs(); }
+          toast(`${P.name} key removed`); render();
+        })),
+      h('div', { class: 'field' }, h('span', { text: rec ? 'Replace key' : 'API key' }),
+        h('div', { class: 'key-row' }, keyInput, h('button', { class: 'btn', type: 'button', disabled: !cryptoOK, onclick: save }, 'Save'))),
+      h('label', { class: 'field', for: modelId }, h('span', { text: 'Model' }),
+        h('input', { class: 'txt', id: modelId, list: `${modelId}-list`, value: prefs.models[pid] || P.model, autocomplete: 'off', spellcheck: 'false', onchange: e => {
+          const v = e.target.value.trim(); if (v && v !== P.model) prefs.models[pid] = v; else delete prefs.models[pid]; savePrefs(); render();
+        } }),
+        h('datalist', { id: `${modelId}-list` }, P.models.map(m => h('option', { value: m })))),
+      priceFields(mainModel(pid), `price-${pid}`),
+      h('a', { class: 'keylink', href: P.keyUrl, target: '_blank', rel: 'noopener noreferrer' }, `Get a ${P.name} key`));
+  }
+  render().then(() => { if (focusId) panel.querySelector('#' + focusId)?.scrollIntoView({ block: 'start' }); });
+}
+
+/* ---------- theme ---------- */
+function applyTheme() {
+  const r = document.documentElement;
+  if (['light', 'bright', 'dark'].includes(prefs.theme)) r.dataset.theme = prefs.theme; else delete r.dataset.theme;
+  const bar = getComputedStyle(r).getPropertyValue('--bar').trim();
+  if (bar) document.querySelector('meta[name="theme-color"]').setAttribute('content', bar);
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', applyTheme);
+
+/* ---------- text size ---------- */
+const TS_MIN = 0.85, TS_MAX = 1.5;
+function applyTextScale() {
+  prefs.textScale = clamp(Math.round((+prefs.textScale || 1) * 100) / 100, TS_MIN, TS_MAX);
+  document.documentElement.style.setProperty('--ts', prefs.textScale);
+}
+function stepText(dir) {
+  prefs.textScale = clamp((+prefs.textScale || 1) + dir * 0.1, TS_MIN, TS_MAX);
+  applyTextScale(); savePrefs();
+  toast(`Text size ${Math.round(prefs.textScale * 100)}%`);
+}
+function textSizeControl() {
+  const pct = () => Math.round(prefs.textScale * 100) + '%';
+  const val = h('span', { class: 'ts-val', text: pct() });
+  const range = h('input', { type: 'range', id: 'textScale', min: TS_MIN * 100, max: TS_MAX * 100, step: 5, value: String(Math.round(prefs.textScale * 100)), 'aria-label': 'Text size', 'aria-valuetext': pct(),
+    oninput: e => { prefs.textScale = +e.target.value / 100; applyTextScale(); val.textContent = pct(); range.setAttribute('aria-valuetext', pct()); },
+    onchange: savePrefs });
+  return h('div', { class: 'field' }, h('span', { text: 'Text size' }),
+    h('div', { class: 'ts-row' }, h('span', { class: 'ts-a', style: 'font-size:.8rem', 'aria-hidden': 'true' }, 'A'), range, h('span', { class: 'ts-a', style: 'font-size:1.35rem', 'aria-hidden': 'true' }, 'A'), val),
+    h('button', { class: 'btn-text', type: 'button', style: 'justify-self:start', onclick: () => {
+      prefs.textScale = 1; applyTextScale(); savePrefs(); range.value = '100'; val.textContent = pct();
+    } }, 'Reset to default'));
+}
+const textItems = () => [
+  { icon: 'textup', label: 'Larger text', run: () => stepText(1) },
+  { icon: 'textdown', label: 'Smaller text', run: () => stepText(-1) },
+];
+
+/* ---------- install as an app (manifest and icons generated in-page) ---------- */
+const ICON_BG = '#123840';
+function drawIcon(size, fullBleed) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const x = c.getContext('2d');
+  if (!x) return '';
+  const k = size / 512;
+  x.fillStyle = ICON_BG;
+  if (fullBleed || !x.roundRect) x.fillRect(0, 0, size, size);
+  else { x.beginPath(); x.roundRect(0, 0, size, size, 112 * k); x.fill(); }
+  // Three currents, the lowest one in copper. Kept inside the maskable safe zone.
+  const waves = [{ y: 190, c: '#7ea6ad', w: 26 }, { y: 256, c: '#eef7f8', w: 30 }, { y: 322, c: '#ec9a4f', w: 34 }];
+  x.lineCap = 'round'; x.lineJoin = 'round';
+  for (const wv of waves) {
+    x.strokeStyle = wv.c; x.lineWidth = wv.w * k; x.beginPath();
+    for (let i = 0; i <= 64; i++) {
+      const px = 128 + i * 4, py = wv.y + Math.sin(i / 64 * Math.PI * 2) * 26;
+      i ? x.lineTo(px * k, py * k) : x.moveTo(px * k, py * k);
+    }
+    x.stroke();
+  }
+  try { return c.toDataURL('image/png'); } catch { return ''; }
+}
+const pwa = { evt: null, icon: '' };
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function setupPwa() {
+  const addLink = (rel, href, extra) => { if (!href) return; const l = h('link', { rel, href, ...extra }); document.head.append(l); };
+  const i192 = drawIcon(192), i512 = drawIcon(512), m512 = drawIcon(512, true);
+  pwa.icon = i192;
+  addLink('icon', drawIcon(64), { type: 'image/png' });
+  addLink('apple-touch-icon', drawIcon(180, true));
+  if (!/^https?:$/.test(location.protocol) || !i512) return;
+  const base = location.href.split('#')[0];
+  const manifest = {
+    id: base, name: 'Undercurrent', short_name: 'Undercurrent',
+    description: 'Hacker News, with the mood of each thread read first.',
+    start_url: base + '#/top', scope: new URL('./', base).href,
+    display: 'standalone', orientation: 'any',
+    background_color: '#e7edef', theme_color: ICON_BG,
+    icons: [
+      { src: i192, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: i512, sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: m512, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    ],
+    shortcuts: [
+      { name: 'Top Stories', url: base + '#/top' },
+      { name: 'Saved', url: base + '#/saved' },
+    ],
+  };
+  addLink('manifest', 'data:application/manifest+json,' + encodeURIComponent(JSON.stringify(manifest)));
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); pwa.evt = e; });
+window.addEventListener('appinstalled', () => { pwa.evt = null; toast('Undercurrent installed'); });
+async function promptInstall() {
+  if (!pwa.evt) return false;
+  const e = pwa.evt; pwa.evt = null;
+  e.prompt();
+  try { const { outcome } = await e.userChoice; if (outcome === 'dismissed') toast('Install cancelled'); } catch {}
+  return true;
+}
+function canOfferInstall() { return !isStandalone() && (!!pwa.evt || isIOS); }
+function installBlock(rerender) {
+  const head = h('div', { class: 'app-row' },
+    pwa.icon && h('img', { src: pwa.icon, alt: '' }),
+    h('div', null, h('b', { text: 'Undercurrent' }), h('small', { text: 'Opens in its own window, with an icon on your home screen or dock.' })));
+  let body;
+  if (isStandalone()) body = h('p', { text: 'You’re using the installed app.' });
+  else if (!/^https?:$/.test(location.protocol)) body = h('p', { text: 'Open this page from a web address (HTTPS) to install it. Browsers can’t install apps from a local file.' });
+  else if (pwa.evt) body = h('button', { class: 'btn', type: 'button', onclick: async () => { await promptInstall(); rerender?.(); } }, 'Install app');
+  else if (isIOS) body = h('ol', { class: 'steps' }, h('li', { text: 'Open this page in Safari.' }), h('li', { text: 'Tap the Share button.' }), h('li', { text: 'Choose Add to Home Screen, then Add.' }));
+  else body = h('p', { text: 'Use your browser’s menu and choose Install app or Add to Home screen. Chrome and Edge also show an install icon at the right of the address bar. Firefox on desktop can’t install web apps.' });
+  return [head, body];
+}
+
+/* ---------- router ---------- */
+function route() {
+  document.querySelectorAll('.scrim').forEach(s => s.close?.());
+  const parts = location.hash.replace(/^#\/?/, '').split('/');
+  const [a = '', b, c] = parts;
+  if (a === 'item' && /^\d+$/.test(b || '')) return showThread(+b, /^\d+$/.test(c || '') ? +c : null);
+  if (a === 'hn' && /^\d+$/.test(b || '')) return resolveHn(+b);
+  if (a === 'saved') return showSaved(b === 'comments' ? 'comments' : 'stories');
+  if (a === 'search') { let q = ''; try { q = decodeURIComponent(parts.slice(1).join('/')); } catch {} return showSearch(q); }
+  return showFeed(FEEDS[a] ? a : 'top');
+}
+window.addEventListener('hashchange', () => { state.navCount++; route(); });
+
+/* ---------- boot ---------- */
+(async function init() {
+  applyTheme();
+  applyTextScale();
+  try { setupPwa(); } catch {}
+  await openDb();
+  const [seen, saved] = await Promise.all([S.values('seen').catch(() => []), S.values('saved').catch(() => [])]);
+  seen.forEach(r => r && state.seen.set(r.id, r));
+  (await S.values('analysis').catch(() => [])).forEach(r => { if (r?.result) state.moods.set(r.id, { verdict: r.result.verdict, score: r.result.score, heat: r.result.heat, kind: r.kind }); });
+  await ledger();
+  saved.forEach(r => r && state.saved.set(r.key, r));
+  pruneSeen();
+  route();
+})();
+})();
+</script>
+</body>
+</html>

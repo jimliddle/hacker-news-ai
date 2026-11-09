@@ -44,7 +44,8 @@ async function fakeFetch(url, opts = {}) {
 const dom = new JSDOM(html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, ''), {
   url: 'https://example.test/', runScripts: 'dangerously', pretendToBeVisual: true,
   beforeParse(w) {
-    w.fetch = fakeFetch; w.TextEncoder = TextEncoder; w.TextDecoder = TextDecoder; w.structuredClone = structuredClone; w.indexedDB = indexedDB; w.IDBKeyRange = IDBKeyRange;
+    w.fetch = fakeFetch; w.CompressionStream = CompressionStream; w.DecompressionStream = DecompressionStream;
+    Object.defineProperty(w.navigator, 'clipboard', { value: { writeText: async t => { globalThis.copied = t; } } }); w.TextEncoder = TextEncoder; w.TextDecoder = TextDecoder; w.structuredClone = structuredClone; w.indexedDB = indexedDB; w.IDBKeyRange = IDBKeyRange;
     Object.defineProperty(w, 'crypto', { value: require('crypto').webcrypto });
     Object.defineProperty(w, 'isSecureContext', { value: true });
     w.matchMedia = () => ({ matches: false, addEventListener() {} });
@@ -231,6 +232,61 @@ const check = (c, msg) => { if (!c) { errors.push('FAIL: ' + msg); } else consol
   check(d.documentElement.dataset.theme === 'bright' && JSON.parse(w.localStorage.getItem('uc.prefs')).theme === 'bright', 'Bright theme applies and persists');
   d.querySelector('#theme-system').click(); await wait(50);
   check(!d.documentElement.dataset.theme, 'System clears the explicit theme');
+  // ---- sharing summaries ----
+  const callsNow = () => calls.filter(u => /anthropic|generativelanguage|openai/.test(u)).length;
+  w.location.hash = '#/item/1'; await wait(500);
+  [...d.querySelectorAll('.ai-actions .btn-text')].find(b => b.textContent === 'Share').click(); await wait(300);
+  const prev = () => d.querySelector('.share-preview').textContent;
+  check(prev().includes('Hacker News mood: Mixed, +12 (lively)') && prev().includes('Discussion: https://news.ycombinator.com/item?id=1'), 'share text has mood and HN link');
+  check(prev().includes('https://www.example1.com/post'), 'share text has article link');
+  check(!prev().includes('Q: '), 'Q&A left out by default');
+  d.querySelector('#shareQA').click(); await wait(300);
+  check(prev().includes('Q: What are the main objections?') && prev().includes('(carol)') && !/\[\d+\]/.test(prev()), 'Q&A included with citations as author names');
+  check(/Open it in Undercurrent: https:\/\/example\.test\/#\/item\/1\/s\/1[\w-]{7}…$/.test(prev()), 'preview shortens the long app link');
+  [...d.querySelectorAll('.share-actions .btn')].find(b => b.textContent.includes('Copy')).click(); await wait(250);
+  const shared1 = globalThis.copied;
+  const linkHash = shared1.match(/#\/item\/1\/s\/[\w-]+/)[0];
+  check(shared1.includes('Q: ') && linkHash.length > 100, 'copied text carries full link, length ' + linkHash.length);
+  // open the shared link while also having our own analysis
+  const c1 = callsNow();
+  w.location.hash = '#/top'; await wait(200);
+  w.location.hash = linkHash; await wait(600);
+  const ai = () => d.querySelector('.ai');
+  check(ai().querySelector('.shared-note')?.textContent.includes('Shared with you. Made with Claude (claude-sonnet-5-5)'), 'shared view labelled');
+  check(ai().querySelectorAll('.shared-qa .qa').length === 2 && ai().querySelector('.shared-qa .cite[href="#/item/1/9002"]'), 'shared Q&A rendered with live citations');
+  const own = [...ai().querySelectorAll('.ai-actions .btn-text')].find(b => b.textContent === 'Show your analysis');
+  check(own, 'offers to show own analysis');
+  own.click(); await wait(300);
+  check(!ai().querySelector('.shared-note') && [...ai().querySelectorAll('.ai-actions .btn-text')].some(b => b.textContent === 'Shared summary'), 'switches to own analysis with a way back');
+  check(callsNow() === c1, 'opening a shared link makes no API call');
+  // recipient with no analysis of their own: re-target the payload at story 8 (node zlib == deflate-raw)
+  const zlib = require('zlib');
+  const payload = JSON.parse(zlib.inflateRawSync(Buffer.from(linkHash.split('/s/')[1].slice(1), 'base64url')).toString());
+  const enc = o => '1' + zlib.deflateRawSync(Buffer.from(JSON.stringify(o))).toString('base64url');
+  w.location.hash = '#/item/8/s/' + enc({ ...payload, id: 8 }); await wait(700);
+  check(ai().querySelector('.shared-note') && [...ai().querySelectorAll('.ai-actions .btn-text')].some(b => b.textContent === 'Analyze it yourself'), 'no own analysis: offers Analyze it yourself');
+  check(callsNow() === c1, 'autorun is held back while a shared summary shows');
+  check(!(await new Promise(r => { const q = indexedDB.open('undercurrent'); q.onsuccess = () => { const t = q.result.transaction('analysis').objectStore('analysis').get(8); t.onsuccess = () => { r(t.result); q.result.close(); }; }; })), 'shared summary not saved as own analysis');
+  check(!d.querySelector('.row[data-id="8"] .r-mood'), 'shared summary does not tag the feed row');
+  [...ai().querySelectorAll('.ai-actions .btn-text')].find(b => b.textContent === 'Analyze it yourself').click(); await wait(600);
+  check(callsNow() === c1 + 1 && ai().dataset.state === 'done' && !ai().querySelector('.shared-note'), 'Analyze it yourself runs a real analysis');
+  // hostile and broken links
+  w.location.hash = '#/item/2/s/' + enc({ ...payload, id: 1 }); await wait(500);
+  check(d.querySelector('#toast').textContent.includes("doesn't match the thread") && !ai().querySelector('.shared-note'), 'id mismatch rejected');
+  w.location.hash = '#/item/2/s/1AAAA'; await wait(500);
+  check(d.querySelector('#toast').textContent.includes('damaged'), 'garbage payload rejected');
+  const evil = { ...payload, id: 5, m: 'x<img src=x onerror=alert(1)>', r: { ...payload.r, headline: '<script>alert(1)</script>', score: 9999, verdict: 'ecstatic' }, qa: [{ q: '<b>hi</b>', a: 'see [9001]' }] };
+  w.location.hash = '#/item/5/s/' + enc(evil); await wait(600);
+  check(!ai().querySelector('script, img') && ai().querySelector('.ai-headline').textContent === '<script>alert(1)</script>'
+    && ai().querySelector('.shared-qa .q').textContent === '<b>hi</b>' && !ai().querySelector('.shared-qa .q b'), 'hostile payload rendered as inert text');
+  check(ai().querySelector('.ai-score').textContent === '+100' && ai().querySelector('.pill.v-mixed') && !/[<>="]/.test(ai().querySelector('.shared-note').textContent), 'hostile values clamped and model name reduced to safe characters');
+  const big = '1' + zlib.deflateRawSync(Buffer.from(JSON.stringify({ ...payload, id: 6, pad: 'a'.repeat(500000) }))).toString('base64url');
+  w.location.hash = '#/item/6/s/' + big; await wait(600);
+  check(d.querySelector('#toast').textContent.includes('damaged') && !ai().querySelector('.shared-note'), 'oversized (zip bomb) payload rejected: ' + big.length);
+  // header menu entry
+  w.location.hash = '#/item/1'; await wait(400);
+  d.querySelector('.hdr .icon-btn[aria-label=More]').click(); await wait(50);
+  check([...d.querySelectorAll('.sheet-item')].some(b => b.textContent === 'Share summary'), 'thread menu offers Share summary');
   console.log('\nerrors:', errors.length ? errors : 'none');
   process.exit(errors.length ? 1 : 0);
 })();

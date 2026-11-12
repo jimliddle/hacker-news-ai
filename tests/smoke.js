@@ -232,6 +232,21 @@ const check = (c, msg) => { if (!c) { errors.push('FAIL: ' + msg); } else consol
   check(d.documentElement.dataset.theme === 'bright' && JSON.parse(w.localStorage.getItem('uc.prefs')).theme === 'bright', 'Bright theme applies and persists');
   d.querySelector('#theme-system').click(); await wait(50);
   check(!d.documentElement.dataset.theme, 'System clears the explicit theme');
+  // ---- sharing the article from the story menu ----
+  w.location.hash = '#/top'; await wait(300);
+  d.querySelector('.row[data-id="3"] .r-more').click(); await wait(50);
+  const labels = [...d.querySelectorAll('.sheet-item')].map(b => b.textContent);
+  const si = labels.indexOf('Share article');
+  check(si > 0 && labels[si - 1] === 'Share discussion' && labels[si + 1] === 'Copy article link', 'story menu: Share discussion, Share article, Copy article link');
+  globalThis.copied = null;
+  [...d.querySelectorAll('.sheet-item')][si].click(); await wait(100);
+  check(globalThis.copied === 'https://www.example3.com/post' && d.querySelector('#toast').textContent === 'Article link copied', 'Share article falls back to copying the article URL');
+  let sharedArgs = null;
+  w.navigator.share = async a => { sharedArgs = a; };
+  d.querySelector('.row[data-id="3"] .r-more').click(); await wait(50);
+  [...d.querySelectorAll('.sheet-item')].find(b => b.textContent === 'Share article').click(); await wait(50);
+  check(sharedArgs?.url === 'https://www.example3.com/post' && sharedArgs?.title === 'Story 3 about Rust', 'Share article uses the share sheet with the article URL');
+  delete w.navigator.share;
   // ---- sharing summaries ----
   const callsNow = () => calls.filter(u => /anthropic|generativelanguage|openai/.test(u)).length;
   w.location.hash = '#/item/1'; await wait(500);

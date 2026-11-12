@@ -12,7 +12,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-KUasD7P71v49xxfX6Idq0sZz2TYSBauoJPi9mVTzWpc='; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: blob:; manifest-src 'self' data: blob:; connect-src https://hacker-news.firebaseio.com https://hn.algolia.com https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-XDP0hry3iYbHolkaNcb38sHCe4xXW2vAeBeW8ofZqes='; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data: blob:; manifest-src 'self' data: blob:; connect-src https://hacker-news.firebaseio.com https://hn.algolia.com https://api.anthropic.com https://api.openai.com https://generativelanguage.googleapis.com; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#123840">
 <meta name="mobile-web-app-capable" content="yes">
@@ -690,6 +690,13 @@ async function share({ title, path, hnId }) {
   }
   copy(url, appLink(path) ? 'Link copied' : 'Hacker News link copied');
 }
+async function shareArticle(title, url) {
+  if (navigator.share) {
+    try { await navigator.share({ title, url }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  copy(url, 'Article link copied');
+}
 function openOverlay(inner, cls) {
   const scrim = h('div', { class: 'scrim ' + (cls || '') }, inner);
   const close = () => {
@@ -845,6 +852,7 @@ function storyMenu(it) {
     { icon: 'comment', label: 'Open discussion', href: `#/item/${it.id}` },
     canRead && { icon: 'spark', label: !mood ? 'Analyze mood' : mood.kind === 'preread' ? 'Re-analyze mood in full' : 'Re-analyze mood', run: () => analyzeFromList(it) },
     { icon: 'share', label: 'Share discussion', run: () => share({ title: it.title, path: `item/${it.id}`, hnId: it.id }) },
+    it.url && { icon: 'external', label: 'Share article', run: () => shareArticle(it.title, it.url) },
     it.url && { icon: 'link', label: 'Copy article link', run: () => copy(it.url, 'Article link copied') },
     { icon: 'link', label: 'Copy Hacker News link', run: () => copy(hnUrl(it.id), 'Hacker News link copied') },
     { icon: 'bookmark', label: saved ? 'Remove from saved' : 'Save story', run: () => toggleSaveStory(it) },
@@ -1024,6 +1032,7 @@ function threadHeader(story, total) {
       { icon: 'refresh', label: 'Refresh thread', run: () => { state.thread = null; showThread(story.id); } },
       (state.moods.has(story.id) || state.shared.has(story.id)) && { icon: 'spark', label: 'Share summary', run: () => openShareSummary(story) },
       ...textItems(),
+      story.url && { icon: 'external', label: 'Share article', run: () => shareArticle(story.title, story.url) },
       story.url && { icon: 'link', label: 'Copy article link', run: () => copy(story.url, 'Article link copied') },
       { icon: 'link', label: 'Copy Hacker News link', run: () => copy(hnUrl(story.id), 'Hacker News link copied') },
       { icon: 'external', label: 'Open on Hacker News', href: hnUrl(story.id) },

@@ -7,7 +7,11 @@ const html = fs.readFileSync(require('path').join(__dirname, '..', 'index.html')
 const errors = [];
 const calls = [];
 const now = Math.floor(Date.now() / 1000);
-const story = id => ({ id, type: 'story', title: `Story ${id} about Rust`, url: `https://www.example${id}.com/post`, by: 'alice', time: now - 3600, score: 120, descendants: 12, kids: [9002, 9001] });
+// Story 11 links to a paywalled page and story 12 is a text post with no link.
+const story = id => ({ id, type: 'story', title: `Story ${id} about Rust`, by: 'alice', time: now - 3600, score: 120, descendants: 12, kids: [9002, 9001],
+  ...(id === 12 ? { text: '<p>What build tools do you use?</p>' } : { url: id === 11 ? 'https://paywall.example.com/story' : `https://www.example${id}.com/post` }) });
+const NOTES = 'Title: Rust compile times, measured\nSource: Example Engineering blog\n- The article claims incremental builds got 40% faster after switching linkers.\n- It measured 12 crates over three months on CI hardware.\n- The author concedes clean builds barely changed.\n"We stopped waiting for the linker."\n' + 'The piece walks through each benchmark in turn and lists the caveats about cache warmth. '.repeat(4);
+globalThis.articleFetches = 0;
 const tree = { id: 1, children: [
   { id: 9001, author: 'bob', created_at_i: now - 1000, text: 'I love this. <a href="https://news.ycombinator.com/item?id=777">ref</a><script>alert(1)</script><p>Second <i>para</i>', children: [
     { id: 9003, author: 'alice', created_at_i: now - 900, text: 'Thanks!', children: [] } ] },
@@ -26,15 +30,34 @@ async function fakeFetch(url, opts = {}) {
   if (url.includes('api.anthropic.com')) {
     const h = opts.headers; if (!h['anthropic-dangerous-direct-browser-access'] || h['x-api-key'] !== 'sk-ant-test1234') throw new Error('bad headers');
     const body = JSON.parse(opts.body);
+    if (body.tools?.[0]?.type?.startsWith('web_fetch')) {
+      globalThis.articleFetches++; globalThis.lastArticleBody = body;
+      const target = body.messages[0].content;
+      if (target.includes('paywall')) return ok({ stop_reason: 'end_turn', usage: { input_tokens: 900, output_tokens: 20 }, content: [
+        { type: 'server_tool_use', id: 'srv_1', name: 'web_fetch', input: { url: 'https://paywall.example.com/story' } },
+        { type: 'web_fetch_tool_result', tool_use_id: 'srv_1', content: { type: 'web_fetch_tool_result_error', error_code: 'url_not_accessible' } },
+        { type: 'text', text: 'FETCH_FAILED: the page is behind a paywall' }] });
+      return ok({ stop_reason: 'end_turn', usage: { input_tokens: 9000, output_tokens: 1500 }, content: [
+        { type: 'server_tool_use', id: 'srv_2', name: 'web_fetch', input: { url: target.split(': ').pop() } },
+        { type: 'web_fetch_tool_result', tool_use_id: 'srv_2', content: { type: 'web_fetch_result', url: target.split(': ').pop(), content: { type: 'document' } } },
+        { type: 'text', text: NOTES }] });
+    }
     if (Array.isArray(body.system)) {
+      globalThis.lastAskContext = body.system[1].text;
       if (!body.system[1].cache_control || !body.system[1].text.includes('[9001] bob')) throw new Error('ask transcript not cached');
       return ok({ content: [{ type: 'text', text: '- Critics doubt the numbers [9002]\n- Fans like it [9001]' }], usage: { input_tokens: 50, output_tokens: 40, cache_read_input_tokens: 9000 } });
     }
     if (!body.messages[0].content.includes('[9001] bob')) throw new Error('transcript missing');
+    globalThis.lastAnalysisPrompt = body.messages[0].content;
     return ok({ content: [{ type: 'text', text: llmJson }], usage: { input_tokens: 10000, output_tokens: 500 } });
   }
   if (url.includes('generativelanguage')) {
     const body = JSON.parse(opts.body); globalThis.lastGeminiContents = body.contents.length; globalThis.geminiCalls = (globalThis.geminiCalls || 0) + 1;
+    if (body.tools?.[0]?.url_context) {
+      globalThis.articleFetches++;
+      return ok({ candidates: [{ content: { parts: [{ text: NOTES }] }, urlContextMetadata: { urlMetadata: [{ retrievedUrl: 'x', urlRetrievalStatus: 'URL_RETRIEVAL_STATUS_SUCCESS' }] } }],
+        usageMetadata: { promptTokenCount: 200, toolUsePromptTokenCount: 8000, candidatesTokenCount: 1500 } });
+    }
     const isAsk = !body.generationConfig.responseMimeType;
     return ok({ candidates: [{ content: { parts: [{ text: isAsk ? '- Critics doubt the numbers [9002]\n- Supporters like the speed [9001, 9003]' : llmJson }] } }], usageMetadata: { promptTokenCount: 10000, candidatesTokenCount: 400 } });
   }
@@ -302,6 +325,80 @@ const check = (c, msg) => { if (!c) { errors.push('FAIL: ' + msg); } else consol
   w.location.hash = '#/item/1'; await wait(400);
   d.querySelector('.hdr .icon-btn[aria-label=More]').click(); await wait(50);
   check([...d.querySelectorAll('.sheet-item')].some(b => b.textContent === 'Share summary'), 'thread menu offers Share summary');
+  // ---- reading the linked article ----
+  const askEl = () => d.querySelector('.ask');
+  const artLine = () => askEl().querySelector('.art-line').textContent;
+  const artBtn = t => [...askEl().querySelectorAll('.art-bar .btn-text, .art-bar .btn')].find(b => b.textContent === t);
+  w.location.hash = '#/top'; await wait(200);
+  w.location.hash = '#/item/13'; await wait(600);
+  check(artLine().includes('Claude reads the article with your first question') && artBtn('Read it now') && artBtn('Paste article text'), 'Ask explains the article will be read on the first question');
+  const f0 = globalThis.articleFetches;
+  askEl().querySelector('.sugg .chip').click(); await wait(700);
+  check(globalThis.articleFetches === f0 + 1 && globalThis.lastArticleBody.tools[0].type === 'web_fetch_20250910' && globalThis.lastArticleBody.messages[0].content.endsWith('https://www.example13.com/post'), 'first question fetches the article with the web fetch tool');
+  check(globalThis.lastAskContext.includes('Article notes (condensed from the linked page)') && globalThis.lastAskContext.includes('40% faster'), 'question context includes the article notes');
+  check(artLine().includes('Answers use the article and the comments') && askEl().querySelector('.art-notes pre').textContent.startsWith('Title: Rust compile times'), 'Ask shows the article is in use and its notes');
+  check(askEl().querySelector('.qa-foot').textContent.includes('with article'), 'answer marked as using the article');
+  askEl().querySelector('#askInput').value = 'Was the benchmark fair?';
+  askEl().querySelector('.ask-form').dispatchEvent(new w.Event('submit', { cancelable: true })); await wait(500);
+  check(globalThis.articleFetches === f0 + 1 && askEl().querySelectorAll('.qa').length === 2, 'follow-up reuses the cached article');
+  const anyway = [...d.querySelectorAll('.ai .btn')].find(b => /Analyze/.test(b.textContent));
+  anyway.click(); await wait(600);
+  check(globalThis.lastAnalysisPrompt.includes('Article notes') && d.querySelector('.ai-foot').textContent.includes('with article'), 'mood analysis uses the cached article');
+  // paywalled page, then paste
+  w.location.hash = '#/item/11'; await wait(600);
+  artBtn('Read it now').click(); await wait(500);
+  check(artLine().includes('Couldn’t read the article: the page is behind a paywall') && artBtn('Try again') && artBtn('Paste article text'), 'paywall reported with retry and paste');
+  artBtn('Paste article text').click(); await wait(50);
+  d.querySelector('#articlePaste').value = 'Pasted article body. '.repeat(40);
+  [...askEl().querySelectorAll('.paste-wrap .btn')].find(b => b.textContent === 'Use this text').click(); await wait(400);
+  check(artLine().includes('The article text was pasted in'), 'pasted text becomes the article');
+  askEl().querySelector('.sugg .chip').click(); await wait(500);
+  check(globalThis.lastAskContext.includes('from text the reader pasted in') && globalThis.lastAskContext.includes('Pasted article body.'), 'question uses the pasted text');
+  // text post: nothing to fetch
+  const f1 = globalThis.articleFetches;
+  w.location.hash = '#/item/12'; await wait(600);
+  check(artLine() === 'Answers use the post and its comments.' && !artBtn('Read it now'), 'text posts need no article');
+  askEl().querySelector('.sugg .chip').click(); await wait(500);
+  check(globalThis.articleFetches === f1, 'asking on a text post fetches nothing');
+  // read before analysis
+  w.location.hash = '#/top'; await wait(200);
+  d.querySelector('.hdr .icon-btn').click(); await wait(100);
+  [...d.querySelectorAll('.nav button')].find(b => b.textContent.includes('Settings')).click(); await wait(300);
+  d.querySelector('#articleAuto').click(); d.querySelector('#monthlyCap').value = ''; d.querySelector('#monthlyCap').dispatchEvent(new w.Event('change'));
+  d.querySelector('.panel-hd .icon-btn').click(); await wait(200);
+  w.location.hash = '#/item/16'; await wait(900);
+  check(globalThis.articleFetches === f1 + 1 && globalThis.lastAnalysisPrompt.includes('example16') && globalThis.lastAnalysisPrompt.includes('Article notes'), 'setting reads the article before the automatic analysis');
+  check(artLine().includes('Answers use the article and the comments'), 'article read for the analysis is shared with Ask');
+  // Gemini uses URL context
+  w.location.hash = '#/top'; await wait(200);
+  d.querySelector('.hdr .icon-btn').click(); await wait(100);
+  [...d.querySelectorAll('.nav button')].find(b => b.textContent.includes('Settings')).click(); await wait(300);
+  d.querySelector('#articleAuto').click();
+  d.querySelector('#use-gemini').click(); await wait(300);
+  d.querySelector('.panel-hd .icon-btn').click(); await wait(200);
+  w.location.hash = '#/item/17'; await wait(700);
+  const f2 = globalThis.articleFetches;
+  artBtn('Read it now').click(); await wait(500);
+  check(globalThis.articleFetches === f2 + 1 && artLine().includes('Answers use the article'), 'Gemini reads the article with URL context');
+  // OpenAI cannot fetch: paste only
+  w.location.hash = '#/top'; await wait(200);
+  d.querySelector('.hdr .icon-btn').click(); await wait(100);
+  [...d.querySelectorAll('.nav button')].find(b => b.textContent.includes('Settings')).click(); await wait(300);
+  const ok_ = d.querySelector('#key-openai'); ok_.value = 'sk-openai-test';
+  ok_.closest('.field').querySelector('.btn').click(); await wait(400);
+  d.querySelector('#use-openai').click(); await wait(300);
+  d.querySelector('.panel-hd .icon-btn').click(); await wait(200);
+  w.location.hash = '#/item/18'; await wait(700);
+  check(artLine().includes('OpenAI can’t fetch web pages here') && !artBtn('Read it now') && artBtn('Paste article text'), 'OpenAI offers paste instead of fetching');
+  // clearing the cache removes article notes
+  w.location.hash = '#/top'; await wait(200);
+  d.querySelector('.hdr .icon-btn').click(); await wait(100);
+  [...d.querySelectorAll('.nav button')].find(b => b.textContent.includes('Settings')).click(); await wait(300);
+  const clr = [...d.querySelectorAll('.drow')].find(r => r.textContent.includes('Cached analyses, articles and answers'));
+  check(clr.textContent.includes('articles read'), 'data panel counts articles');
+  const cb = clr.querySelector('.btn'); cb.click(); await wait(20); cb.click(); await wait(400);
+  check(!(await kvGet('art:13')) && !(await kvGet('art:11')), 'Clear cache removes article notes');
+  d.querySelector('.panel-hd .icon-btn').click(); await wait(200);
   console.log('\nerrors:', errors.length ? errors : 'none');
   process.exit(errors.length ? 1 : 0);
 })();
